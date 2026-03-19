@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
 
-const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/auth/callback'];
+const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/auth/callback', '/api/'];
 const ROLE_PREFIXES = ['/admin', '/madrich', '/participant', '/parent'];
 
 const ROLE_ROUTES: Record<string, string> = {
