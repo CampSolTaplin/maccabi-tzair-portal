@@ -18,6 +18,7 @@ import {
   Layers,
   Settings,
   Cloud,
+  FileUp,
   BarChart3,
   CalendarCheck,
   Target,
@@ -48,6 +49,7 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
     { label: 'Groups', href: '/admin/groups', icon: Layers },
     { label: 'Settings', href: '/admin/settings', icon: Settings },
     { label: 'Salesforce', href: '/admin/salesforce', icon: Cloud },
+    { label: 'Import', href: '/admin/roster-import', icon: FileUp },
   ],
   madrich: [
     { label: 'My Group', href: '/madrich', icon: LayoutDashboard },
