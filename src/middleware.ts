@@ -1,7 +1,10 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
 
-const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/auth/callback', '/api/'];
+// Only truly public routes (no /api/ blanket access)
+const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/auth/callback'];
+// API routes that need to be public (auth callback only)
+const PUBLIC_API_ROUTES = ['/api/auth/'];
 const ROLE_PREFIXES = ['/admin', '/madrich', '/participant', '/parent'];
 
 const ROLE_ROUTES: Record<string, string> = {
@@ -35,6 +38,30 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse;
   }
 
+  // Allow specific public API routes
+  if (PUBLIC_API_ROUTES.some(r => path.startsWith(r))) {
+    return supabaseResponse;
+  }
+
+  // API routes: require authentication but skip role-based redirect
+  if (path.startsWith('/api/')) {
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    // Admin API routes require admin role
+    if (path.startsWith('/api/admin/')) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+      if (profile?.role !== 'admin') {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+    }
+    return supabaseResponse;
+  }
+
   // Protected routes: must be logged in
   if (!user) {
     const url = request.nextUrl.clone();
@@ -61,7 +88,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Root path → redirect based on role
+  // Root path -> redirect based on role
   if (path === '/') {
     const { data: profile } = await supabase
       .from('profiles')
@@ -79,6 +106,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };
