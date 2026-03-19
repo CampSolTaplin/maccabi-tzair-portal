@@ -49,7 +49,13 @@ export async function GET() {
           grade,
           school,
           allergies,
-          salesforce_contact_id
+          salesforce_contact_id,
+          parent_name,
+          parent_email,
+          parent_phone,
+          emergency_contact_name,
+          emergency_contact_phone,
+          family_name
         )
       `)
       .eq('is_active', true)
@@ -68,6 +74,12 @@ export async function GET() {
       school: string | null;
       allergies: string | null;
       salesforceContactId: string | null;
+      parentName: string | null;
+      parentEmail: string | null;
+      parentPhone: string | null;
+      emergencyContactName: string | null;
+      emergencyContactPhone: string | null;
+      familyName: string | null;
     }>>();
 
     for (const m of memberships ?? []) {
@@ -79,6 +91,12 @@ export async function GET() {
         school: string | null;
         allergies: string | null;
         salesforce_contact_id: string | null;
+        parent_name: string | null;
+        parent_email: string | null;
+        parent_phone: string | null;
+        emergency_contact_name: string | null;
+        emergency_contact_phone: string | null;
+        family_name: string | null;
       } | null;
 
       if (!p) continue;
@@ -92,6 +110,12 @@ export async function GET() {
         school: p.school,
         allergies: p.allergies,
         salesforceContactId: p.salesforce_contact_id,
+        parentName: p.parent_name,
+        parentEmail: p.parent_email,
+        parentPhone: p.parent_phone,
+        emergencyContactName: p.emergency_contact_name,
+        emergencyContactPhone: p.emergency_contact_phone,
+        familyName: p.family_name,
       });
       memberMap.set(m.group_id, list);
     }
