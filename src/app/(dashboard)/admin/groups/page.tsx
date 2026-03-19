@@ -16,6 +16,7 @@ import {
   Printer,
   Phone,
   Info,
+  Mail,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -35,6 +36,13 @@ interface GroupMember {
   emergencyContactName: string | null;
   emergencyContactPhone: string | null;
   familyName: string | null;
+  gender: string | null;
+  fatherName: string | null;
+  fatherEmail: string | null;
+  fatherPhone: string | null;
+  motherName: string | null;
+  motherEmail: string | null;
+  motherPhone: string | null;
 }
 
 interface GroupWithMembers {
@@ -100,12 +108,16 @@ function buildCsvContent(groups: GroupWithMembers[], members: GroupMember[], inc
     ...(includeGroupColumn ? ['Group'] : []),
     'First Name',
     'Last Name',
+    'Gender',
     'Grade',
     'School',
     'Allergies',
-    'Parent Name',
-    'Parent Email',
-    'Parent Phone',
+    'Father Name',
+    'Father Email',
+    'Father Phone',
+    'Mother Name',
+    'Mother Email',
+    'Mother Phone',
     'Emergency Contact',
     'Emergency Phone',
   ];
@@ -118,12 +130,16 @@ function buildCsvContent(groups: GroupWithMembers[], members: GroupMember[], inc
       ...(includeGroupColumn ? [escapeCsvField(group?.name)] : []),
       escapeCsvField(m.firstName),
       escapeCsvField(m.lastName),
+      escapeCsvField(m.gender),
       escapeCsvField(m.grade),
       escapeCsvField(m.school),
       escapeCsvField(m.allergies),
-      escapeCsvField(m.parentName),
-      escapeCsvField(m.parentEmail),
-      escapeCsvField(m.parentPhone),
+      escapeCsvField(m.fatherName),
+      escapeCsvField(m.fatherEmail),
+      escapeCsvField(m.fatherPhone),
+      escapeCsvField(m.motherName),
+      escapeCsvField(m.motherEmail),
+      escapeCsvField(m.motherPhone),
       escapeCsvField(m.emergencyContactName),
       escapeCsvField(m.emergencyContactPhone),
     ].join(',');
@@ -308,6 +324,9 @@ function GroupCard({
                   <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
                     Name
                   </th>
+                  <th className="pb-1.5 pr-2 text-center font-medium text-brand-muted text-xs w-8">
+                    G
+                  </th>
                   <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
                     Grade
                   </th>
@@ -315,13 +334,10 @@ function GroupCard({
                     School
                   </th>
                   <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                    Parent/Family
+                    Father
                   </th>
                   <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                    Parent Email
-                  </th>
-                  <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                    Parent Phone
+                    Mother
                   </th>
                   {hasAnyAllergies && (
                     <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
@@ -343,39 +359,77 @@ function GroupCard({
                     <td className="py-1.5 pr-3 font-medium text-brand-dark-text whitespace-nowrap">
                       {member.firstName} {member.lastName}
                     </td>
+                    <td className="py-1.5 pr-2 text-center whitespace-nowrap">
+                      {member.gender === 'Male' ? (
+                        <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-50 text-blue-600 text-xs font-semibold" title="Male">M</span>
+                      ) : member.gender === 'Female' ? (
+                        <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-pink-50 text-pink-600 text-xs font-semibold" title="Female">F</span>
+                      ) : (
+                        <span className="text-brand-muted text-xs">&mdash;</span>
+                      )}
+                    </td>
                     <td className="py-1.5 pr-3 text-brand-muted whitespace-nowrap">
                       {member.grade ?? '-'}
                     </td>
                     <td className="py-1.5 pr-3 text-brand-muted whitespace-nowrap">
                       {member.school ?? '-'}
                     </td>
-                    <td className="py-1.5 pr-3 text-brand-muted whitespace-nowrap">
-                      {member.parentName || member.familyName || '-'}
-                    </td>
                     <td className="py-1.5 pr-3 whitespace-nowrap">
-                      {member.parentEmail ? (
-                        <a
-                          href={`mailto:${member.parentEmail}`}
-                          className="text-brand-navy hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {member.parentEmail}
-                        </a>
+                      {member.fatherName ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span className="text-brand-dark-text text-xs">{member.fatherName}</span>
+                          {member.fatherEmail && (
+                            <a
+                              href={`mailto:${member.fatherEmail}`}
+                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                              title={member.fatherEmail}
+                            >
+                              <Mail className="h-3 w-3" />
+                            </a>
+                          )}
+                          {member.fatherPhone && (
+                            <a
+                              href={`tel:${member.fatherPhone}`}
+                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                              title={member.fatherPhone}
+                            >
+                              <Phone className="h-3 w-3" />
+                            </a>
+                          )}
+                        </span>
                       ) : (
-                        <span className="text-brand-muted">-</span>
+                        <span className="text-brand-muted text-xs">&mdash;</span>
                       )}
                     </td>
                     <td className="py-1.5 pr-3 whitespace-nowrap">
-                      {member.parentPhone ? (
-                        <a
-                          href={`tel:${member.parentPhone}`}
-                          className="text-brand-navy hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {member.parentPhone}
-                        </a>
+                      {member.motherName ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span className="text-brand-dark-text text-xs">{member.motherName}</span>
+                          {member.motherEmail && (
+                            <a
+                              href={`mailto:${member.motherEmail}`}
+                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                              title={member.motherEmail}
+                            >
+                              <Mail className="h-3 w-3" />
+                            </a>
+                          )}
+                          {member.motherPhone && (
+                            <a
+                              href={`tel:${member.motherPhone}`}
+                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                              title={member.motherPhone}
+                            >
+                              <Phone className="h-3 w-3" />
+                            </a>
+                          )}
+                        </span>
                       ) : (
-                        <span className="text-brand-muted">-</span>
+                        <span className="text-brand-muted text-xs">&mdash;</span>
                       )}
                     </td>
                     {hasAnyAllergies && (

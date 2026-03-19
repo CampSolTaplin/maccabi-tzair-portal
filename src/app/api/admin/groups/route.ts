@@ -55,7 +55,14 @@ export async function GET() {
           parent_phone,
           emergency_contact_name,
           emergency_contact_phone,
-          family_name
+          family_name,
+          gender,
+          father_name,
+          father_email,
+          father_phone,
+          mother_name,
+          mother_email,
+          mother_phone
         )
       `)
       .eq('is_active', true)
@@ -80,6 +87,13 @@ export async function GET() {
       emergencyContactName: string | null;
       emergencyContactPhone: string | null;
       familyName: string | null;
+      gender: string | null;
+      fatherName: string | null;
+      fatherEmail: string | null;
+      fatherPhone: string | null;
+      motherName: string | null;
+      motherEmail: string | null;
+      motherPhone: string | null;
     }>>();
 
     for (const m of memberships ?? []) {
@@ -97,6 +111,13 @@ export async function GET() {
         emergency_contact_name: string | null;
         emergency_contact_phone: string | null;
         family_name: string | null;
+        gender: string | null;
+        father_name: string | null;
+        father_email: string | null;
+        father_phone: string | null;
+        mother_name: string | null;
+        mother_email: string | null;
+        mother_phone: string | null;
       } | null;
 
       if (!p) continue;
@@ -116,6 +137,13 @@ export async function GET() {
         emergencyContactName: p.emergency_contact_name,
         emergencyContactPhone: p.emergency_contact_phone,
         familyName: p.family_name,
+        gender: p.gender,
+        fatherName: p.father_name,
+        fatherEmail: p.father_email,
+        fatherPhone: p.father_phone,
+        motherName: p.mother_name,
+        motherEmail: p.mother_email,
+        motherPhone: p.mother_phone,
       });
       memberMap.set(m.group_id, list);
     }
