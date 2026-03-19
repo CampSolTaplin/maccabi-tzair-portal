@@ -34,8 +34,8 @@ export default function LoginPage() {
         return;
       }
 
-      router.push('/');
-      router.refresh();
+      // Full page reload to ensure cookies are sent to the server
+      window.location.href = '/';
     } catch {
       setError('An unexpected error occurred. Please try again.');
     } finally {
