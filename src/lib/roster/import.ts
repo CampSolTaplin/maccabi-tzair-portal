@@ -356,7 +356,6 @@ export async function importRoster(
           id: newId,
           first_name: firstName,
           last_name: lastName,
-          display_name: `${firstName} ${lastName}`,
           role: 'participant',
           salesforce_contact_id: contactId,
           salesforce_account_id: row.accountId || null,
