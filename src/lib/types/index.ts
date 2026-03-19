@@ -9,6 +9,13 @@ export interface Profile {
   avatar_url: string | null;
   phone: string | null;
   salesforce_contact_id: string | null;
+  birthdate?: string | null;
+  grade?: string | null;
+  school?: string | null;
+  allergies?: string | null;
+  behavioral_notes?: string | null;
+  salesforce_account_id?: string | null;
+  needs_email?: boolean;
   is_active: boolean;
   created_at: string;
   updated_at: string;
