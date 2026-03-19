@@ -34,6 +34,16 @@ export default function LoginPage() {
         return;
       }
 
+      // Check if user has MFA enrolled
+      const { data: aal } =
+        await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+
+      if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
+        // User has MFA enabled, redirect to verification
+        window.location.href = '/mfa-verify';
+        return;
+      }
+
       // Full page reload to ensure cookies are sent to the server
       window.location.href = '/';
     } catch {

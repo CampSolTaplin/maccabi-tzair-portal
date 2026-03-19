@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
 
 // Only truly public routes (no /api/ blanket access)
-const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/auth/callback'];
+const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/auth/callback', '/mfa-verify'];
 // API routes that need to be public (auth callback only)
 const PUBLIC_API_ROUTES = ['/api/auth/'];
 const ROLE_PREFIXES = ['/admin', '/madrich', '/participant', '/parent'];
@@ -68,6 +68,18 @@ export async function middleware(request: NextRequest) {
     url.pathname = '/login';
     url.searchParams.set('redirect', path);
     return NextResponse.redirect(url);
+  }
+
+  // For admin routes, enforce AAL2 if user has MFA enrolled
+  if (path.startsWith('/admin') || path.startsWith('/api/admin')) {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
+      // MFA required but not verified
+      if (path.startsWith('/api/')) {
+        return NextResponse.json({ error: 'MFA verification required' }, { status: 403 });
+      }
+      return NextResponse.redirect(new URL('/mfa-verify', request.url));
+    }
   }
 
   // Role-based route protection
