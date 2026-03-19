@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -17,6 +17,7 @@ import {
   Phone,
   Info,
   Mail,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -53,6 +54,296 @@ interface GroupWithMembers {
   description: string;
   memberCount: number;
   members: GroupMember[];
+}
+
+/* ─── Column Definitions ─── */
+
+interface ColumnDef {
+  key: string;
+  label: string;
+  defaultVisible: boolean;
+  headerClassName?: string;
+  cellClassName?: string;
+  renderHeader: () => React.ReactNode;
+  renderCell: (member: GroupMember, visibleColumns: Record<string, boolean>) => React.ReactNode;
+  csvHeader: string;
+  csvValue: (member: GroupMember) => string;
+}
+
+const COLUMN_DEFS: ColumnDef[] = [
+  {
+    key: 'gender',
+    label: 'Gender',
+    defaultVisible: true,
+    headerClassName: 'text-center w-8',
+    cellClassName: 'text-center',
+    renderHeader: () => 'G',
+    renderCell: (member) =>
+      member.gender === 'Male' ? (
+        <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-50 text-blue-600 text-xs font-semibold" title="Male">M</span>
+      ) : member.gender === 'Female' ? (
+        <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-pink-50 text-pink-600 text-xs font-semibold" title="Female">F</span>
+      ) : (
+        <span className="text-brand-muted text-xs">&mdash;</span>
+      ),
+    csvHeader: 'Gender',
+    csvValue: (m) => m.gender ?? '',
+  },
+  {
+    key: 'grade',
+    label: 'Grade',
+    defaultVisible: true,
+    renderHeader: () => 'Grade',
+    renderCell: (member) => <span className="text-brand-muted">{member.grade ?? '-'}</span>,
+    csvHeader: 'Grade',
+    csvValue: (m) => m.grade ?? '',
+  },
+  {
+    key: 'school',
+    label: 'School',
+    defaultVisible: true,
+    renderHeader: () => 'School',
+    renderCell: (member) => <span className="text-brand-muted">{member.school ?? '-'}</span>,
+    csvHeader: 'School',
+    csvValue: (m) => m.school ?? '',
+  },
+  {
+    key: 'father',
+    label: 'Father',
+    defaultVisible: true,
+    renderHeader: () => 'Father',
+    renderCell: (member, visibleColumns) => {
+      if (!member.fatherName) return <span className="text-brand-muted text-xs">&mdash;</span>;
+      const showEmailInline = !visibleColumns.fatherEmail;
+      const showPhoneInline = !visibleColumns.fatherPhone;
+      return (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-brand-dark-text text-xs">{member.fatherName}</span>
+          {showEmailInline && member.fatherEmail && (
+            <a
+              href={`mailto:${member.fatherEmail}`}
+              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+              title={member.fatherEmail}
+            >
+              <Mail className="h-3 w-3" />
+            </a>
+          )}
+          {showPhoneInline && member.fatherPhone && (
+            <a
+              href={`tel:${member.fatherPhone}`}
+              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+              title={member.fatherPhone}
+            >
+              <Phone className="h-3 w-3" />
+            </a>
+          )}
+        </span>
+      );
+    },
+    csvHeader: 'Father Name',
+    csvValue: (m) => m.fatherName ?? '',
+  },
+  {
+    key: 'mother',
+    label: 'Mother',
+    defaultVisible: true,
+    renderHeader: () => 'Mother',
+    renderCell: (member, visibleColumns) => {
+      if (!member.motherName) return <span className="text-brand-muted text-xs">&mdash;</span>;
+      const showEmailInline = !visibleColumns.motherEmail;
+      const showPhoneInline = !visibleColumns.motherPhone;
+      return (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-brand-dark-text text-xs">{member.motherName}</span>
+          {showEmailInline && member.motherEmail && (
+            <a
+              href={`mailto:${member.motherEmail}`}
+              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+              title={member.motherEmail}
+            >
+              <Mail className="h-3 w-3" />
+            </a>
+          )}
+          {showPhoneInline && member.motherPhone && (
+            <a
+              href={`tel:${member.motherPhone}`}
+              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+              title={member.motherPhone}
+            >
+              <Phone className="h-3 w-3" />
+            </a>
+          )}
+        </span>
+      );
+    },
+    csvHeader: 'Mother Name',
+    csvValue: (m) => m.motherName ?? '',
+  },
+  {
+    key: 'allergies',
+    label: 'Allergies',
+    defaultVisible: false,
+    renderHeader: () => 'Allergies',
+    renderCell: (member) =>
+      member.allergies ? (
+        <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md text-xs font-medium">
+          {member.allergies}
+        </span>
+      ) : null,
+    csvHeader: 'Allergies',
+    csvValue: (m) => m.allergies ?? '',
+  },
+  {
+    key: 'emergencyContact',
+    label: 'Emergency Contact',
+    defaultVisible: false,
+    renderHeader: () => 'Emergency Contact',
+    renderCell: (member) => {
+      if (!member.emergencyContactName && !member.emergencyContactPhone) return null;
+      return (
+        <span className="text-xs text-brand-dark-text">
+          {member.emergencyContactName}
+          {member.emergencyContactName && member.emergencyContactPhone && ' - '}
+          {member.emergencyContactPhone}
+        </span>
+      );
+    },
+    csvHeader: 'Emergency Contact',
+    csvValue: (m) => [m.emergencyContactName, m.emergencyContactPhone].filter(Boolean).join(' - '),
+  },
+  {
+    key: 'parentEmail',
+    label: 'Parent Email (old)',
+    defaultVisible: false,
+    renderHeader: () => 'Parent Email',
+    renderCell: (member) =>
+      member.parentEmail ? (
+        <a href={`mailto:${member.parentEmail}`} className="text-brand-navy hover:underline text-xs" onClick={(e) => e.stopPropagation()}>
+          {member.parentEmail}
+        </a>
+      ) : <span className="text-brand-muted text-xs">&mdash;</span>,
+    csvHeader: 'Parent Email (old)',
+    csvValue: (m) => m.parentEmail ?? '',
+  },
+  {
+    key: 'parentPhone',
+    label: 'Parent Phone (old)',
+    defaultVisible: false,
+    renderHeader: () => 'Parent Phone',
+    renderCell: (member) =>
+      member.parentPhone ? (
+        <a href={`tel:${member.parentPhone}`} className="text-brand-navy hover:underline text-xs" onClick={(e) => e.stopPropagation()}>
+          {member.parentPhone}
+        </a>
+      ) : <span className="text-brand-muted text-xs">&mdash;</span>,
+    csvHeader: 'Parent Phone (old)',
+    csvValue: (m) => m.parentPhone ?? '',
+  },
+  {
+    key: 'familyName',
+    label: 'Family Name',
+    defaultVisible: false,
+    renderHeader: () => 'Family Name',
+    renderCell: (member) => <span className="text-brand-dark-text text-xs">{member.familyName ?? '-'}</span>,
+    csvHeader: 'Family Name',
+    csvValue: (m) => m.familyName ?? '',
+  },
+  {
+    key: 'fatherEmail',
+    label: 'Father Email',
+    defaultVisible: false,
+    renderHeader: () => 'Father Email',
+    renderCell: (member) =>
+      member.fatherEmail ? (
+        <a href={`mailto:${member.fatherEmail}`} className="text-brand-navy hover:underline text-xs" onClick={(e) => e.stopPropagation()}>
+          {member.fatherEmail}
+        </a>
+      ) : <span className="text-brand-muted text-xs">&mdash;</span>,
+    csvHeader: 'Father Email',
+    csvValue: (m) => m.fatherEmail ?? '',
+  },
+  {
+    key: 'fatherPhone',
+    label: 'Father Phone',
+    defaultVisible: false,
+    renderHeader: () => 'Father Phone',
+    renderCell: (member) =>
+      member.fatherPhone ? (
+        <a href={`tel:${member.fatherPhone}`} className="text-brand-navy hover:underline text-xs" onClick={(e) => e.stopPropagation()}>
+          {member.fatherPhone}
+        </a>
+      ) : <span className="text-brand-muted text-xs">&mdash;</span>,
+    csvHeader: 'Father Phone',
+    csvValue: (m) => m.fatherPhone ?? '',
+  },
+  {
+    key: 'motherEmail',
+    label: 'Mother Email',
+    defaultVisible: false,
+    renderHeader: () => 'Mother Email',
+    renderCell: (member) =>
+      member.motherEmail ? (
+        <a href={`mailto:${member.motherEmail}`} className="text-brand-navy hover:underline text-xs" onClick={(e) => e.stopPropagation()}>
+          {member.motherEmail}
+        </a>
+      ) : <span className="text-brand-muted text-xs">&mdash;</span>,
+    csvHeader: 'Mother Email',
+    csvValue: (m) => m.motherEmail ?? '',
+  },
+  {
+    key: 'motherPhone',
+    label: 'Mother Phone',
+    defaultVisible: false,
+    renderHeader: () => 'Mother Phone',
+    renderCell: (member) =>
+      member.motherPhone ? (
+        <a href={`tel:${member.motherPhone}`} className="text-brand-navy hover:underline text-xs" onClick={(e) => e.stopPropagation()}>
+          {member.motherPhone}
+        </a>
+      ) : <span className="text-brand-muted text-xs">&mdash;</span>,
+    csvHeader: 'Mother Phone',
+    csvValue: (m) => m.motherPhone ?? '',
+  },
+  {
+    key: 'salesforceId',
+    label: 'Salesforce ID',
+    defaultVisible: false,
+    renderHeader: () => 'Salesforce ID',
+    renderCell: (member) => (
+      <span className="text-brand-muted text-xs font-mono">{member.salesforceContactId ?? '-'}</span>
+    ),
+    csvHeader: 'Salesforce ID',
+    csvValue: (m) => m.salesforceContactId ?? '',
+  },
+];
+
+const DEFAULT_VISIBLE: Record<string, boolean> = Object.fromEntries(
+  COLUMN_DEFS.map((c) => [c.key, c.defaultVisible])
+);
+
+const STORAGE_KEY = 'maccabi-groups-columns';
+
+function loadVisibleColumns(): Record<string, boolean> {
+  if (typeof window === 'undefined') return DEFAULT_VISIBLE;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as Record<string, boolean>;
+      // Merge with defaults so new columns get their default value
+      const merged = { ...DEFAULT_VISIBLE };
+      for (const key of Object.keys(merged)) {
+        if (key in parsed) merged[key] = parsed[key];
+      }
+      return merged;
+    }
+  } catch {
+    // ignore
+  }
+  return DEFAULT_VISIBLE;
 }
 
 /* ─── Area Helpers ─── */
@@ -103,23 +394,17 @@ function escapeCsvField(value: string | null | undefined): string {
   return s;
 }
 
-function buildCsvContent(groups: GroupWithMembers[], members: GroupMember[], includeGroupColumn: boolean): string {
+function buildCsvContent(
+  groups: GroupWithMembers[],
+  members: GroupMember[],
+  includeGroupColumn: boolean,
+  visibleCols: ColumnDef[]
+): string {
   const headers = [
     ...(includeGroupColumn ? ['Group'] : []),
     'First Name',
     'Last Name',
-    'Gender',
-    'Grade',
-    'School',
-    'Allergies',
-    'Father Name',
-    'Father Email',
-    'Father Phone',
-    'Mother Name',
-    'Mother Email',
-    'Mother Phone',
-    'Emergency Contact',
-    'Emergency Phone',
+    ...visibleCols.map((c) => c.csvHeader),
   ];
 
   const rows = members.map((m) => {
@@ -130,18 +415,7 @@ function buildCsvContent(groups: GroupWithMembers[], members: GroupMember[], inc
       ...(includeGroupColumn ? [escapeCsvField(group?.name)] : []),
       escapeCsvField(m.firstName),
       escapeCsvField(m.lastName),
-      escapeCsvField(m.gender),
-      escapeCsvField(m.grade),
-      escapeCsvField(m.school),
-      escapeCsvField(m.allergies),
-      escapeCsvField(m.fatherName),
-      escapeCsvField(m.fatherEmail),
-      escapeCsvField(m.fatherPhone),
-      escapeCsvField(m.motherName),
-      escapeCsvField(m.motherEmail),
-      escapeCsvField(m.motherPhone),
-      escapeCsvField(m.emergencyContactName),
-      escapeCsvField(m.emergencyContactPhone),
+      ...visibleCols.map((c) => escapeCsvField(c.csvValue(m))),
     ].join(',');
   });
 
@@ -160,7 +434,93 @@ function downloadCsv(csv: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-/* ─── Emergency Contact Tooltip ─── */
+/* ─── Column Picker ─── */
+
+function ColumnPicker({
+  visibleColumns,
+  onChange,
+}: {
+  visibleColumns: Record<string, boolean>;
+  onChange: (next: Record<string, boolean>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  const allChecked = COLUMN_DEFS.every((c) => visibleColumns[c.key]);
+
+  return (
+    <div ref={ref} className="relative">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen((v) => !v)}
+        className="whitespace-nowrap"
+        title="Choose visible columns"
+      >
+        <SlidersHorizontal className="h-4 w-4" />
+        <span className="hidden sm:inline ml-1">Columns</span>
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full mt-2 z-50 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2">
+          {/* Actions */}
+          <div className="flex items-center justify-between px-3 pb-2 border-b border-gray-100 text-xs">
+            <button
+              type="button"
+              className="text-brand-navy hover:underline cursor-pointer font-medium"
+              onClick={() => {
+                const all: Record<string, boolean> = {};
+                COLUMN_DEFS.forEach((c) => (all[c.key] = true));
+                onChange(all);
+              }}
+            >
+              {allChecked ? 'Deselect All' : 'Select All'}
+            </button>
+            <button
+              type="button"
+              className="text-brand-muted hover:text-brand-dark-text hover:underline cursor-pointer"
+              onClick={() => onChange({ ...DEFAULT_VISIBLE })}
+            >
+              Reset to Default
+            </button>
+          </div>
+          {/* Column list */}
+          <div className="max-h-72 overflow-y-auto py-1">
+            {COLUMN_DEFS.map((col) => (
+              <label
+                key={col.key}
+                className="flex items-center gap-2.5 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm text-brand-dark-text"
+              >
+                <input
+                  type="checkbox"
+                  checked={!!visibleColumns[col.key]}
+                  onChange={() => {
+                    onChange({ ...visibleColumns, [col.key]: !visibleColumns[col.key] });
+                  }}
+                  className="h-4 w-4 rounded border-gray-300 text-brand-navy focus:ring-brand-navy accent-brand-navy"
+                />
+                {col.label}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Emergency Contact Tooltip (used when emergencyContact column is hidden) ─── */
 
 function EmergencyTooltip({ member }: { member: GroupMember }) {
   const [open, setOpen] = useState(false);
@@ -220,11 +580,15 @@ function GroupCard({
   expanded,
   onToggle,
   searchQuery,
+  visibleColumns,
+  activeColumns,
 }: {
   group: GroupWithMembers;
   expanded: boolean;
   onToggle: () => void;
   searchQuery: string;
+  visibleColumns: Record<string, boolean>;
+  activeColumns: ColumnDef[];
 }) {
   const filteredMembers = useMemo(() => {
     if (!searchQuery.trim()) return group.members;
@@ -241,20 +605,17 @@ function GroupCard({
     ? filteredMembers.length
     : group.memberCount;
 
-  // Check if anyone in the group has allergies
-  const hasAnyAllergies = useMemo(
-    () => filteredMembers.some((m) => m.allergies),
-    [filteredMembers]
-  );
-
   // Hide card entirely if searching and no matches
   if (searchQuery.trim() && filteredMembers.length === 0) return null;
 
   function handleGroupExport(e: React.MouseEvent) {
     e.stopPropagation();
-    const csv = buildCsvContent([group], filteredMembers, false);
+    const csv = buildCsvContent([group], filteredMembers, false, activeColumns);
     downloadCsv(csv, `${group.name.replace(/[^a-zA-Z0-9]/g, '_')}_roster.csv`);
   }
+
+  // Show emergency tooltip column only when emergencyContact column is NOT visible
+  const showEmergencyTooltipCol = !visibleColumns.emergencyContact;
 
   return (
     <Card
@@ -324,30 +685,23 @@ function GroupCard({
                   <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
                     Name
                   </th>
-                  <th className="pb-1.5 pr-2 text-center font-medium text-brand-muted text-xs w-8">
-                    G
-                  </th>
-                  <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                    Grade
-                  </th>
-                  <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                    School
-                  </th>
-                  <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                    Father
-                  </th>
-                  <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                    Mother
-                  </th>
-                  {hasAnyAllergies && (
-                    <th className="pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs">
-                      Allergies
+                  {activeColumns.map((col) => (
+                    <th
+                      key={col.key}
+                      className={cn(
+                        'pb-1.5 pr-3 text-left font-medium text-brand-muted text-xs',
+                        col.headerClassName
+                      )}
+                    >
+                      {col.renderHeader()}
+                    </th>
+                  ))}
+                  {showEmergencyTooltipCol && (
+                    <th className="pb-1.5 text-left font-medium text-brand-muted text-xs w-8">
+                      <span className="sr-only">Emergency</span>
+                      <Info className="h-3 w-3 inline" />
                     </th>
                   )}
-                  <th className="pb-1.5 text-left font-medium text-brand-muted text-xs w-8">
-                    <span className="sr-only">Emergency</span>
-                    <Info className="h-3 w-3 inline" />
-                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -359,91 +713,19 @@ function GroupCard({
                     <td className="py-1.5 pr-3 font-medium text-brand-dark-text whitespace-nowrap">
                       {member.firstName} {member.lastName}
                     </td>
-                    <td className="py-1.5 pr-2 text-center whitespace-nowrap">
-                      {member.gender === 'Male' ? (
-                        <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-50 text-blue-600 text-xs font-semibold" title="Male">M</span>
-                      ) : member.gender === 'Female' ? (
-                        <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-pink-50 text-pink-600 text-xs font-semibold" title="Female">F</span>
-                      ) : (
-                        <span className="text-brand-muted text-xs">&mdash;</span>
-                      )}
-                    </td>
-                    <td className="py-1.5 pr-3 text-brand-muted whitespace-nowrap">
-                      {member.grade ?? '-'}
-                    </td>
-                    <td className="py-1.5 pr-3 text-brand-muted whitespace-nowrap">
-                      {member.school ?? '-'}
-                    </td>
-                    <td className="py-1.5 pr-3 whitespace-nowrap">
-                      {member.fatherName ? (
-                        <span className="inline-flex items-center gap-1">
-                          <span className="text-brand-dark-text text-xs">{member.fatherName}</span>
-                          {member.fatherEmail && (
-                            <a
-                              href={`mailto:${member.fatherEmail}`}
-                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
-                              onClick={(e) => e.stopPropagation()}
-                              title={member.fatherEmail}
-                            >
-                              <Mail className="h-3 w-3" />
-                            </a>
-                          )}
-                          {member.fatherPhone && (
-                            <a
-                              href={`tel:${member.fatherPhone}`}
-                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
-                              onClick={(e) => e.stopPropagation()}
-                              title={member.fatherPhone}
-                            >
-                              <Phone className="h-3 w-3" />
-                            </a>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-brand-muted text-xs">&mdash;</span>
-                      )}
-                    </td>
-                    <td className="py-1.5 pr-3 whitespace-nowrap">
-                      {member.motherName ? (
-                        <span className="inline-flex items-center gap-1">
-                          <span className="text-brand-dark-text text-xs">{member.motherName}</span>
-                          {member.motherEmail && (
-                            <a
-                              href={`mailto:${member.motherEmail}`}
-                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
-                              onClick={(e) => e.stopPropagation()}
-                              title={member.motherEmail}
-                            >
-                              <Mail className="h-3 w-3" />
-                            </a>
-                          )}
-                          {member.motherPhone && (
-                            <a
-                              href={`tel:${member.motherPhone}`}
-                              className="text-brand-navy hover:text-brand-navy/80 transition-colors"
-                              onClick={(e) => e.stopPropagation()}
-                              title={member.motherPhone}
-                            >
-                              <Phone className="h-3 w-3" />
-                            </a>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-brand-muted text-xs">&mdash;</span>
-                      )}
-                    </td>
-                    {hasAnyAllergies && (
-                      <td className="py-1.5 pr-3 whitespace-nowrap">
-                        {member.allergies ? (
-                          <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md text-xs font-medium">
-                            {member.allergies}
-                          </span>
-                        ) : null}
+                    {activeColumns.map((col) => (
+                      <td
+                        key={col.key}
+                        className={cn('py-1.5 pr-3 whitespace-nowrap', col.cellClassName)}
+                      >
+                        {col.renderCell(member, visibleColumns)}
+                      </td>
+                    ))}
+                    {showEmergencyTooltipCol && (
+                      <td className="py-1.5 whitespace-nowrap">
+                        <EmergencyTooltip member={member} />
                       </td>
                     )}
-                    <td className="py-1.5 whitespace-nowrap">
-                      <EmergencyTooltip member={member} />
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -462,6 +744,27 @@ export default function AdminGroupsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(DEFAULT_VISIBLE);
+
+  // Load from localStorage on mount
+  useEffect(() => {
+    setVisibleColumns(loadVisibleColumns());
+  }, []);
+
+  // Persist to localStorage on change
+  const handleColumnsChange = useCallback((next: Record<string, boolean>) => {
+    setVisibleColumns(next);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const activeColumns = useMemo(
+    () => COLUMN_DEFS.filter((c) => visibleColumns[c.key]),
+    [visibleColumns]
+  );
 
   const {
     data,
@@ -530,10 +833,10 @@ export default function AdminGroupsPage() {
   }
 
   const handleExportCsv = useCallback(() => {
-    const csv = buildCsvContent(filteredGroups, visibleMembers, true);
+    const csv = buildCsvContent(filteredGroups, visibleMembers, true, activeColumns);
     const filterLabel = areaFilter === 'all' ? 'all_groups' : areaFilter;
     downloadCsv(csv, `maccabi_tzair_${filterLabel}_roster.csv`);
-  }, [filteredGroups, visibleMembers, areaFilter]);
+  }, [filteredGroups, visibleMembers, areaFilter, activeColumns]);
 
   const handlePrint = useCallback(() => {
     window.print();
@@ -638,6 +941,11 @@ export default function AdminGroupsPage() {
               />
             </div>
 
+            {/* Column Picker */}
+            {!isLoading && !error && groups.length > 0 && (
+              <ColumnPicker visibleColumns={visibleColumns} onChange={handleColumnsChange} />
+            )}
+
             {/* Export CSV */}
             {!isLoading && !error && groups.length > 0 && (
               <Button
@@ -722,6 +1030,8 @@ export default function AdminGroupsPage() {
                 expanded={expandedGroups.has(group.id)}
                 onToggle={() => toggleGroup(group.id)}
                 searchQuery={searchQuery}
+                visibleColumns={visibleColumns}
+                activeColumns={activeColumns}
               />
             ))}
 
