@@ -37,38 +37,39 @@ interface NavItem {
   label: string;
   href: string;
   icon: LucideIcon;
+  disabled?: boolean;
 }
 
 const NAV_ITEMS: Record<UserRole, NavItem[]> = {
   admin: [
     { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
-    { label: 'Attendance', href: '/admin/attendance', icon: ClipboardCheck },
-    { label: 'Sessions', href: '/admin/sessions', icon: Calendar },
-    { label: 'Events', href: '/admin/events', icon: PartyPopper },
-    { label: 'Community Hours', href: '/admin/hours', icon: Clock },
-    { label: 'Users', href: '/admin/users', icon: Users },
     { label: 'Groups', href: '/admin/groups', icon: Layers },
-    { label: 'Settings', href: '/admin/settings', icon: Settings },
+    { label: 'Attendance', href: '/admin/attendance', icon: ClipboardCheck, disabled: true },
+    { label: 'Sessions', href: '/admin/sessions', icon: Calendar, disabled: true },
+    { label: 'Events', href: '/admin/events', icon: PartyPopper, disabled: true },
+    { label: 'Community Hours', href: '/admin/hours', icon: Clock, disabled: true },
+    { label: 'Users', href: '/admin/users', icon: Users, disabled: true },
+    { label: 'Settings', href: '/admin/settings', icon: Settings, disabled: true },
     { label: 'Security', href: '/admin/security', icon: Shield },
     { label: 'Salesforce', href: '/admin/salesforce', icon: Cloud },
     { label: 'Import', href: '/admin/roster-import', icon: FileUp },
   ],
   madrich: [
     { label: 'My Group', href: '/madrich', icon: LayoutDashboard },
-    { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck },
-    { label: 'Group Stats', href: '/madrich/stats', icon: BarChart3 },
+    { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck, disabled: true },
+    { label: 'Group Stats', href: '/madrich/stats', icon: BarChart3, disabled: true },
   ],
   participant: [
     { label: 'Dashboard', href: '/participant', icon: LayoutDashboard },
-    { label: 'My Attendance', href: '/participant/attendance', icon: CalendarCheck },
-    { label: 'My Hours', href: '/participant/hours', icon: Clock },
-    { label: 'My Goals', href: '/participant/goals', icon: Target },
-    { label: 'Self-Evaluation', href: '/participant/evaluation', icon: FileText },
+    { label: 'My Attendance', href: '/participant/attendance', icon: CalendarCheck, disabled: true },
+    { label: 'My Hours', href: '/participant/hours', icon: Clock, disabled: true },
+    { label: 'My Goals', href: '/participant/goals', icon: Target, disabled: true },
+    { label: 'Self-Evaluation', href: '/participant/evaluation', icon: FileText, disabled: true },
   ],
   parent: [
     { label: 'My Children', href: '/parent', icon: Users },
-    { label: 'Notifications', href: '/parent/notifications', icon: Bell },
-    { label: 'Settings', href: '/parent/settings', icon: Settings },
+    { label: 'Notifications', href: '/parent/notifications', icon: Bell, disabled: true },
+    { label: 'Settings', href: '/parent/settings', icon: Settings, disabled: true },
   ],
 };
 
@@ -122,7 +123,7 @@ export default function DashboardLayout({
   }
 
   const navItems = NAV_ITEMS[profile.role] ?? [];
-  const mobileNavItems = navItems.slice(0, 5);
+  const mobileNavItems = navItems.filter((item) => !item.disabled).slice(0, 5);
 
   async function handleSignOut() {
     const supabase = createClient();
@@ -176,6 +177,26 @@ export default function DashboardLayout({
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
+            if (item.disabled) {
+              return (
+                <div
+                  key={item.href}
+                  className={cn(
+                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-white/30 cursor-not-allowed',
+                    sidebarCollapsed && 'justify-center px-2'
+                  )}
+                  title={sidebarCollapsed ? `${item.label} (coming soon)` : 'Coming soon'}
+                >
+                  <Icon className="h-5 w-5 flex-shrink-0" />
+                  {!sidebarCollapsed && (
+                    <span className="truncate flex items-center gap-2">
+                      {item.label}
+                      <span className="text-[9px] bg-white/10 rounded-full px-1.5 py-0.5 uppercase tracking-wider">Soon</span>
+                    </span>
+                  )}
+                </div>
+              );
+            }
             return (
               <Link
                 key={item.href}
@@ -276,6 +297,20 @@ export default function DashboardLayout({
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
+            if (item.disabled) {
+              return (
+                <div
+                  key={item.href}
+                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-white/30 cursor-not-allowed"
+                >
+                  <Icon className="h-5 w-5 flex-shrink-0" />
+                  <span className="flex items-center gap-2">
+                    {item.label}
+                    <span className="text-[9px] bg-white/10 rounded-full px-1.5 py-0.5 uppercase tracking-wider">Soon</span>
+                  </span>
+                </div>
+              );
+            }
             return (
               <Link
                 key={item.href}

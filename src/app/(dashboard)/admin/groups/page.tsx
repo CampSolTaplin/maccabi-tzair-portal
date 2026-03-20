@@ -18,6 +18,10 @@ import {
   Info,
   Mail,
   SlidersHorizontal,
+  RefreshCw,
+  Loader2,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -555,6 +559,104 @@ function EmergencyTooltip({ member }: { member: GroupMember }) {
   );
 }
 
+/* ─── Enrich from Salesforce Button ─── */
+
+function EnrichButton({ onComplete }: { onComplete: () => void }) {
+  const [enriching, setEnriching] = useState(false);
+  const [result, setResult] = useState<{
+    enrichedFromSF: number;
+    parentsFound: number;
+    schoolsNormalized: number;
+    allergiesCleaned: number;
+    errors: { name: string; error: string }[];
+  } | null>(null);
+  const [enrichError, setEnrichError] = useState<string | null>(null);
+
+  async function handleEnrich() {
+    if (!confirm('Update all participant profiles with fresh data from Salesforce?\n\n• Gender, school, allergies\n• Father & mother name, email, phone\n\nNo new profiles will be created.')) return;
+
+    setEnriching(true);
+    setResult(null);
+    setEnrichError(null);
+
+    try {
+      const res = await fetch('/api/admin/salesforce/sync', { method: 'POST' });
+      if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      const data = await res.json();
+      setResult(data.result);
+      onComplete();
+    } catch (err) {
+      setEnrichError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleEnrich}
+        disabled={enriching}
+        className="whitespace-nowrap"
+        title="Update profiles with Salesforce data"
+      >
+        {enriching ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <RefreshCw className="h-4 w-4" />
+        )}
+        <span className="hidden sm:inline ml-1">
+          {enriching ? 'Enriching...' : 'Enrich SF'}
+        </span>
+      </Button>
+
+      {/* Result toast */}
+      {(result || enrichError) && (
+        <div className="absolute right-0 top-full mt-2 z-50 w-72 bg-white rounded-lg shadow-lg border border-gray-200 p-3">
+          {enrichError ? (
+            <div className="flex items-start gap-2 text-sm text-red-700">
+              <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>{enrichError}</span>
+            </div>
+          ) : result ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-emerald-700">
+                <CheckCircle2 className="h-4 w-4" />
+                Enrich Complete
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 text-xs text-brand-muted">
+                <span>Profiles enriched:</span>
+                <span className="font-medium text-brand-dark-text">{result.enrichedFromSF}</span>
+                <span>Parents found:</span>
+                <span className="font-medium text-brand-dark-text">{result.parentsFound}</span>
+                <span>Schools normalized:</span>
+                <span className="font-medium text-brand-dark-text">{result.schoolsNormalized}</span>
+                <span>Allergies cleaned:</span>
+                <span className="font-medium text-brand-dark-text">{result.allergiesCleaned}</span>
+                {result.errors.length > 0 && (
+                  <>
+                    <span>Errors:</span>
+                    <span className="font-medium text-red-600">{result.errors.length}</span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => { setResult(null); setEnrichError(null); }}
+                className="text-[10px] text-brand-muted hover:text-brand-dark-text mt-1"
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Skeleton ─── */
 
 function GroupCardSkeleton() {
@@ -770,6 +872,7 @@ export default function AdminGroupsPage() {
     data,
     isLoading,
     error,
+    refetch,
   } = useQuery<{ groups: GroupWithMembers[] }>({
     queryKey: ['admin-groups'],
     queryFn: async () => {
@@ -972,6 +1075,11 @@ export default function AdminGroupsPage() {
                 <Printer className="h-4 w-4" />
                 <span className="hidden sm:inline ml-1">Print</span>
               </Button>
+            )}
+
+            {/* Enrich from Salesforce */}
+            {!isLoading && !error && groups.length > 0 && (
+              <EnrichButton onComplete={() => refetch()} />
             )}
 
             {/* Expand/Collapse All */}

@@ -127,6 +127,7 @@ export async function runSalesforceEnrich(triggeredBy: string): Promise<EnrichRe
   ];
 
   // 3. Query SF for contact details (batch by 200)
+  // Use sf15() for map keys since DB stores 15-char IDs but SF returns 18-char
   const sfContactMap = new Map<string, SalesforceContact>();
 
   for (let i = 0; i < contactIds.length; i += 200) {
@@ -141,7 +142,7 @@ export async function runSalesforceEnrich(triggeredBy: string): Promise<EnrichRe
 
     const records = await queryAllSOQL<SalesforceContact>(soql);
     for (const r of records) {
-      sfContactMap.set(r.Id, r);
+      sfContactMap.set(sf15(r.Id)!, r);
     }
   }
 
@@ -168,7 +169,7 @@ export async function runSalesforceEnrich(triggeredBy: string): Promise<EnrichRe
   // 5. For each profile, enrich with SF data
   for (const profile of profiles) {
     try {
-      const sfContact = sfContactMap.get(profile.salesforce_contact_id as string);
+      const sfContact = sfContactMap.get(sf15(profile.salesforce_contact_id as string)!);
       if (!sfContact) continue; // Not found in SF, skip
 
       const update: Record<string, unknown> = {};
