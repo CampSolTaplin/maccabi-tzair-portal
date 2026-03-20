@@ -44,11 +44,11 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
   admin: [
     { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
     { label: 'Groups', href: '/admin/groups', icon: Layers },
-    { label: 'Attendance', href: '/admin/attendance', icon: ClipboardCheck, disabled: true },
-    { label: 'Sessions', href: '/admin/sessions', icon: Calendar, disabled: true },
+    { label: 'Attendance', href: '/admin/attendance', icon: ClipboardCheck },
+    { label: 'Sessions', href: '/admin/sessions', icon: Calendar },
+    { label: 'Madrichim', href: '/admin/madrichim', icon: Users },
     { label: 'Events', href: '/admin/events', icon: PartyPopper, disabled: true },
     { label: 'Community Hours', href: '/admin/hours', icon: Clock, disabled: true },
-    { label: 'Users', href: '/admin/users', icon: Users, disabled: true },
     { label: 'Settings', href: '/admin/settings', icon: Settings, disabled: true },
     { label: 'Security', href: '/admin/security', icon: Shield },
     { label: 'Salesforce', href: '/admin/salesforce', icon: Cloud },
@@ -56,7 +56,7 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
   ],
   madrich: [
     { label: 'My Group', href: '/madrich', icon: LayoutDashboard },
-    { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck, disabled: true },
+    { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck },
     { label: 'Group Stats', href: '/madrich/stats', icon: BarChart3, disabled: true },
   ],
   participant: [
