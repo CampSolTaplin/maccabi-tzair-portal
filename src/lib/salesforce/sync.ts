@@ -1,368 +1,275 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { queryAllSOQL } from './client';
-import {
-  generatePassword,
-  findExistingProfileBySalesforceId,
-  findSOMGroupId,
-} from './sync-helpers';
-import type {
-  SalesforceContact,
-  SyncResult,
-  SyncError,
-  NewUserCredential,
-} from './types';
+import type { SalesforceContact, EnrichResult } from './types';
 
-const SOM_CONTACTS_QUERY = `
-  SELECT Id, FirstName, LastName, Email, MobilePhone, Phone, Birthdate,
-         TREX1__Age__c, TREX1__Grade__c, School__c, Allergies__c,
-         Behavorial_Issues__c, AccountId, Quattro_Family_Position__c,
-         Active_Registrations__c
-  FROM Contact
-  WHERE SOM_Registration_Allowed__c = true
-`.trim();
+/* ── School normalization map ── */
 
-function buildParentQuery(accountIds: string[]): string {
-  const escaped = accountIds.map((id) => `'${id}'`).join(',');
-  return `
-    SELECT Id, FirstName, LastName, Email, MobilePhone, Phone, AccountId,
-           Quattro_Family_Position__c, TREX1__Age__c
-    FROM Contact
-    WHERE AccountId IN (${escaped})
-      AND TREX1__Age__c > 18
-      AND SOM_Registration_Allowed__c != true
-  `.trim();
+const SCHOOL_MAP: Record<string, string> = {
+  hillel: 'Scheck Hillel Community School',
+  'scheck hillel': 'Scheck Hillel Community School',
+  'scheck hillel community school': 'Scheck Hillel Community School',
+  'ben gamla': 'Ben Gamla Charter School',
+  'ben gamla charter school': 'Ben Gamla Charter School',
+  posnack: 'David Posnack Jewish Day School',
+  'posnack school': 'David Posnack Jewish Day School',
+  'david posnack jewish day school': 'David Posnack Jewish Day School',
+  aces: 'Aventura City of Excellence School',
+  'aventura city of excellence school': 'Aventura City of Excellence School',
+  krop: 'Krop Senior High',
+  kropp: 'Krop Senior High',
+  'don soffer': 'Don Soffer Aventura High School',
+  'don soffer aventura high school': 'Don Soffer Aventura High School',
+  nsu: 'NSU University School',
+  'nsu university school': 'NSU University School',
+  'nova university school': 'NSU University School',
+  'highland oaks': 'Highland Oaks',
+  'highland oaks elementary': 'Highland Oaks',
+  'highland oaks middle': 'Highland Oaks',
+  'pine crest': 'Pine Crest School',
+  'pine crest school': 'Pine Crest School',
+  pinecrest: 'Pine Crest School',
+  'aventura waterways': 'Aventura Waterways K-8',
+  'aventura waterways k-8': 'Aventura Waterways K-8',
+  jla: 'Jewish Leadership Academy',
+  hom: 'Hebrew of Miami',
+  'hebrew of miami': 'Hebrew of Miami',
+  'ruth k broad': 'Ruth K. Broad Bay Harbor K-8',
+  bridgeprep: 'BridgePrep Academy',
+  'beachside montessori': 'Beachside Montessori Village',
+  'beachside montessori village': 'Beachside Montessori Village',
+  vabhoe: 'VABHOE',
+};
+
+/* ── Allergy cleanup ── */
+
+const NO_ALLERGY = new Set([
+  'no',
+  'n/a',
+  'na',
+  'none',
+  'no.',
+  'nope',
+  'no allergies',
+  'non',
+  'no known allergies',
+  'ninguna',
+  'n',
+  '-',
+  'no tiene',
+  'nothing',
+]);
+
+function normalizeSchool(raw: string | null): { value: string | null; normalized: boolean } {
+  if (!raw) return { value: null, normalized: false };
+  const trimmed = raw.trim();
+  const mapped = SCHOOL_MAP[trimmed.toLowerCase()];
+  if (mapped && mapped !== trimmed) return { value: mapped, normalized: true };
+  return { value: trimmed, normalized: false };
 }
 
-export async function runSalesforceSync(triggeredBy: string): Promise<{
-  result: SyncResult;
-  credentials: NewUserCredential[];
-}> {
+function cleanAllergies(raw: string | null): { value: string | null; cleaned: boolean } {
+  if (!raw) return { value: null, cleaned: false };
+  const trimmed = raw.trim();
+  if (NO_ALLERGY.has(trimmed.toLowerCase())) return { value: null, cleaned: true };
+  return { value: trimmed, cleaned: false };
+}
+
+function cleanEmail(email: string | null): string | null {
+  if (!email) return null;
+  return email.replace('.invalid', '');
+}
+
+/** Normalize Salesforce IDs to 15-char for comparison */
+function sf15(id: string | null): string | null {
+  return id ? id.substring(0, 15) : null;
+}
+
+/* ── Main enrich function ── */
+
+export async function runSalesforceEnrich(triggeredBy: string): Promise<EnrichResult> {
   const adminClient = createAdminClient();
 
-  const result: SyncResult = {
-    totalProcessed: 0,
-    participantsCreated: 0,
-    participantsUpdated: 0,
-    participantsSkipped: 0,
-    parentsCreated: 0,
-    parentsUpdated: 0,
-    parentsSkipped: 0,
-    relationshipsCreated: 0,
-    membershipsCreated: 0,
+  const result: EnrichResult = {
+    totalProfiles: 0,
+    enrichedFromSF: 0,
+    parentsFound: 0,
+    schoolsNormalized: 0,
+    allergiesCleaned: 0,
     errors: [],
   };
-  const credentials: NewUserCredential[] = [];
 
-  // 1. Log start
-  const { data: logRow } = await adminClient
-    .from('salesforce_sync_log')
-    .insert({
-      sync_type: 'full',
-      status: 'running',
-      triggered_by: triggeredBy,
-    })
-    .select('id')
-    .single();
+  // 1. Get all profiles with salesforce_contact_id
+  const { data: profiles, error: profilesError } = await adminClient
+    .from('profiles')
+    .select('id, salesforce_contact_id, salesforce_account_id, first_name, last_name')
+    .not('salesforce_contact_id', 'is', null);
 
-  const logId = logRow?.id;
-
-  try {
-    // 2-3. Query SOM contacts from Salesforce
-    const somContacts = await queryAllSOQL<SalesforceContact>(SOM_CONTACTS_QUERY);
-    result.totalProcessed = somContacts.length;
-
-    // 4. Find SOM group
-    const somGroupId = await findSOMGroupId(adminClient);
-
-    // 5. Process each SOM contact
-    for (const contact of somContacts) {
-      try {
-        const contactName = `${contact.FirstName ?? ''} ${contact.LastName}`.trim();
-        const existing = await findExistingProfileBySalesforceId(adminClient, contact.Id);
-
-        if (existing) {
-          // Update existing profile
-          await adminClient
-            .from('profiles')
-            .update({
-              first_name: contact.FirstName ?? '',
-              last_name: contact.LastName,
-              phone: contact.MobilePhone ?? contact.Phone ?? null,
-              birthdate: contact.Birthdate ?? null,
-              grade: contact.TREX1__Grade__c ?? null,
-              school: contact.School__c ?? null,
-              allergies: contact.Allergies__c ?? null,
-              behavioral_notes: contact.Behavorial_Issues__c ?? null,
-              salesforce_account_id: contact.AccountId ?? null,
-            })
-            .eq('id', existing.id);
-
-          result.participantsUpdated++;
-        } else if (contact.Email) {
-          // New contact with email: create auth user
-          const tempPassword = generatePassword();
-          const { data: authUser, error: authError } =
-            await adminClient.auth.admin.createUser({
-              email: contact.Email,
-              password: tempPassword,
-              email_confirm: true,
-              user_metadata: {
-                role: 'participant',
-                first_name: contact.FirstName ?? '',
-                last_name: contact.LastName,
-                salesforce_contact_id: contact.Id,
-              },
-            });
-
-          if (authError) {
-            throw new Error(`Auth user creation failed: ${authError.message}`);
-          }
-
-          // The handle_new_user trigger creates the profile; now update it with SF data
-          await adminClient
-            .from('profiles')
-            .update({
-              phone: contact.MobilePhone ?? contact.Phone ?? null,
-              salesforce_contact_id: contact.Id,
-              salesforce_account_id: contact.AccountId ?? null,
-              birthdate: contact.Birthdate ?? null,
-              grade: contact.TREX1__Grade__c ?? null,
-              school: contact.School__c ?? null,
-              allergies: contact.Allergies__c ?? null,
-              behavioral_notes: contact.Behavorial_Issues__c ?? null,
-              is_active: true,
-            })
-            .eq('id', authUser.user.id);
-
-          // Create group membership
-          const { error: membershipError } = await adminClient
-            .from('group_memberships')
-            .upsert(
-              {
-                profile_id: authUser.user.id,
-                group_id: somGroupId,
-                role: 'participant',
-                is_active: true,
-              },
-              { onConflict: 'profile_id,group_id,role' }
-            );
-
-          if (!membershipError) {
-            result.membershipsCreated++;
-          }
-
-          credentials.push({
-            role: 'participant',
-            firstName: contact.FirstName ?? '',
-            lastName: contact.LastName,
-            email: contact.Email,
-            temporaryPassword: tempPassword,
-            salesforceId: contact.Id,
-          });
-
-          result.participantsCreated++;
-        } else {
-          // New contact without email: create profile directly
-          const newId = crypto.randomUUID();
-          await adminClient.from('profiles').insert({
-            id: newId,
-            role: 'participant',
-            first_name: contact.FirstName ?? '',
-            last_name: contact.LastName,
-            phone: contact.MobilePhone ?? contact.Phone ?? null,
-            salesforce_contact_id: contact.Id,
-            salesforce_account_id: contact.AccountId ?? null,
-            birthdate: contact.Birthdate ?? null,
-            grade: contact.TREX1__Grade__c ?? null,
-            school: contact.School__c ?? null,
-            allergies: contact.Allergies__c ?? null,
-            behavioral_notes: contact.Behavorial_Issues__c ?? null,
-            is_active: false,
-            needs_email: true,
-          });
-
-          // Create group membership for the no-email profile too
-          await adminClient.from('group_memberships').upsert(
-            {
-              profile_id: newId,
-              group_id: somGroupId,
-              role: 'participant',
-              is_active: true,
-            },
-            { onConflict: 'profile_id,group_id,role' }
-          );
-
-          result.membershipsCreated++;
-          result.participantsSkipped++;
-        }
-      } catch (err) {
-        result.errors.push({
-          contactId: contact.Id,
-          contactName: `${contact.FirstName ?? ''} ${contact.LastName}`.trim(),
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // 6. Collect unique AccountIds
-    const accountIds = [
-      ...new Set(
-        somContacts
-          .map((c) => c.AccountId)
-          .filter((id): id is string => id !== null)
-      ),
-    ];
-
-    // 7. Query parents in batches of 200
-    const allParents: SalesforceContact[] = [];
-    for (let i = 0; i < accountIds.length; i += 200) {
-      const batch = accountIds.slice(i, i + 200);
-      const parents = await queryAllSOQL<SalesforceContact>(buildParentQuery(batch));
-      allParents.push(...parents);
-    }
-
-    // 8. Process parents
-    for (const parent of allParents) {
-      try {
-        const existing = await findExistingProfileBySalesforceId(adminClient, parent.Id);
-
-        if (existing) {
-          // Update existing parent profile
-          await adminClient
-            .from('profiles')
-            .update({
-              first_name: parent.FirstName ?? '',
-              last_name: parent.LastName,
-              phone: parent.MobilePhone ?? parent.Phone ?? null,
-              salesforce_account_id: parent.AccountId ?? null,
-            })
-            .eq('id', existing.id);
-
-          result.parentsUpdated++;
-        } else if (parent.Email) {
-          // New parent with email
-          const tempPassword = generatePassword();
-          const { data: authUser, error: authError } =
-            await adminClient.auth.admin.createUser({
-              email: parent.Email,
-              password: tempPassword,
-              email_confirm: true,
-              user_metadata: {
-                role: 'parent',
-                first_name: parent.FirstName ?? '',
-                last_name: parent.LastName,
-                salesforce_contact_id: parent.Id,
-              },
-            });
-
-          if (authError) {
-            throw new Error(`Parent auth creation failed: ${authError.message}`);
-          }
-
-          await adminClient
-            .from('profiles')
-            .update({
-              phone: parent.MobilePhone ?? parent.Phone ?? null,
-              salesforce_contact_id: parent.Id,
-              salesforce_account_id: parent.AccountId ?? null,
-              is_active: true,
-            })
-            .eq('id', authUser.user.id);
-
-          credentials.push({
-            role: 'parent',
-            firstName: parent.FirstName ?? '',
-            lastName: parent.LastName,
-            email: parent.Email,
-            temporaryPassword: tempPassword,
-            salesforceId: parent.Id,
-          });
-
-          result.parentsCreated++;
-        } else {
-          // No email, skip parent
-          result.parentsSkipped++;
-        }
-      } catch (err) {
-        result.errors.push({
-          contactId: parent.Id,
-          contactName: `${parent.FirstName ?? ''} ${parent.LastName}`.trim(),
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // 9. Build parent-child relationships
-    // Get all SOM participant profiles with salesforce_account_id
-    const { data: participantProfiles } = await adminClient
-      .from('profiles')
-      .select('id, salesforce_account_id')
-      .eq('role', 'participant')
-      .not('salesforce_account_id', 'is', null);
-
-    if (participantProfiles) {
-      for (const participant of participantProfiles) {
-        if (!participant.salesforce_account_id) continue;
-
-        // Find parent profiles with same account ID
-        const { data: parentProfiles } = await adminClient
-          .from('profiles')
-          .select('id')
-          .eq('role', 'parent')
-          .eq('salesforce_account_id', participant.salesforce_account_id);
-
-        if (parentProfiles) {
-          for (const parentProfile of parentProfiles) {
-            const { error: relError } = await adminClient
-              .from('parent_child')
-              .upsert(
-                {
-                  parent_id: parentProfile.id,
-                  child_id: participant.id,
-                  relationship: 'parent',
-                },
-                { onConflict: 'parent_id,child_id' }
-              );
-
-            if (!relError) {
-              result.relationshipsCreated++;
-            }
-          }
-        }
-      }
-    }
-
-    // 10. Update log with success
-    if (logId) {
-      await adminClient
-        .from('salesforce_sync_log')
-        .update({
-          status: 'completed',
-          records_synced: result.totalProcessed,
-          records_created: result.participantsCreated + result.parentsCreated,
-          records_updated: result.participantsUpdated + result.parentsUpdated,
-          error_message:
-            result.errors.length > 0
-              ? `${result.errors.length} errors during sync`
-              : null,
-          completed_at: new Date().toISOString(),
-        })
-        .eq('id', logId);
-    }
-  } catch (err) {
-    // Fatal error: update log
-    if (logId) {
-      await adminClient
-        .from('salesforce_sync_log')
-        .update({
-          status: 'failed',
-          error_message: err instanceof Error ? err.message : String(err),
-          completed_at: new Date().toISOString(),
-        })
-        .eq('id', logId);
-    }
-    throw err;
+  if (profilesError) {
+    throw new Error(`Failed to fetch profiles: ${profilesError.message}`);
   }
 
-  return { result, credentials };
+  if (!profiles || profiles.length === 0) {
+    return result;
+  }
+
+  result.totalProfiles = profiles.length;
+
+  // 2. Collect unique contact IDs and account IDs
+  const contactIds = profiles
+    .map((p) => p.salesforce_contact_id as string)
+    .filter(Boolean);
+  const accountIds = [
+    ...new Set(
+      profiles
+        .map((p) => p.salesforce_account_id as string)
+        .filter(Boolean)
+    ),
+  ];
+
+  // 3. Query SF for contact details (batch by 200)
+  const sfContactMap = new Map<string, SalesforceContact>();
+
+  for (let i = 0; i < contactIds.length; i += 200) {
+    const batch = contactIds.slice(i, i + 200);
+    const inClause = batch.map((id) => `'${id}'`).join(',');
+    const soql = `
+      SELECT Id, FirstName, LastName, Email, MobilePhone, Phone, Gender__c,
+             TREX1__Age__c, TREX1__Grade__c, School__c, Allergies__c,
+             Behavorial_Issues__c, AccountId
+      FROM Contact WHERE Id IN (${inClause})
+    `.trim();
+
+    const records = await queryAllSOQL<SalesforceContact>(soql);
+    for (const r of records) {
+      sfContactMap.set(r.Id, r);
+    }
+  }
+
+  // 4. Query SF for adults in same accounts (for parent data)
+  const adultsByAccount = new Map<string, SalesforceContact[]>();
+
+  for (let i = 0; i < accountIds.length; i += 200) {
+    const batch = accountIds.slice(i, i + 200);
+    const inClause = batch.map((id) => `'${id}'`).join(',');
+    const soql = `
+      SELECT Id, FirstName, LastName, Email, MobilePhone, Phone, AccountId,
+             TREX1__Age__c, Gender__c
+      FROM Contact WHERE AccountId IN (${inClause}) AND TREX1__Age__c > 18
+    `.trim();
+
+    const records = await queryAllSOQL<SalesforceContact>(soql);
+    for (const r of records) {
+      const key = sf15(r.AccountId)!;
+      if (!adultsByAccount.has(key)) adultsByAccount.set(key, []);
+      adultsByAccount.get(key)!.push(r);
+    }
+  }
+
+  // 5. For each profile, enrich with SF data
+  for (const profile of profiles) {
+    try {
+      const sfContact = sfContactMap.get(profile.salesforce_contact_id as string);
+      if (!sfContact) continue; // Not found in SF, skip
+
+      const update: Record<string, unknown> = {};
+      let wasEnriched = false;
+
+      // a. Update gender from SF contact
+      if (sfContact.Gender__c) {
+        update.gender = sfContact.Gender__c;
+        wasEnriched = true;
+      }
+
+      // b. Normalize school name
+      const school = normalizeSchool(sfContact.School__c);
+      if (school.value !== undefined) {
+        update.school = school.value;
+        if (school.normalized) result.schoolsNormalized++;
+        wasEnriched = true;
+      }
+
+      // c. Clean allergies
+      const allergies = cleanAllergies(sfContact.Allergies__c);
+      update.allergies = allergies.value;
+      if (allergies.cleaned) result.allergiesCleaned++;
+      wasEnriched = true;
+
+      // d. Find father and mother from adults in same account
+      const accountKey = sf15(profile.salesforce_account_id as string);
+      if (accountKey) {
+        const adults = (adultsByAccount.get(accountKey) || []).filter(
+          (a) => sf15(a.Id) !== sf15(profile.salesforce_contact_id as string)
+        );
+
+        if (adults.length > 0) {
+          let father: SalesforceContact | null = null;
+          let mother: SalesforceContact | null = null;
+
+          // Gender-based classification with fallback
+          for (const a of adults) {
+            const g = (a.Gender__c || '').toLowerCase();
+            if (g.includes('male') && !g.includes('female')) {
+              if (!father) father = a;
+            } else if (g.includes('female')) {
+              if (!mother) mother = a;
+            } else {
+              // Unknown gender: assign to first available slot
+              if (!father) father = a;
+              else if (!mother) mother = a;
+            }
+          }
+          // Fallback if gender classification found nobody
+          if (!father && !mother) {
+            father = adults[0];
+            if (adults.length > 1) mother = adults[1];
+          }
+
+          // e. Update father data
+          if (father) {
+            update.father_name =
+              `${father.FirstName || ''} ${father.LastName || ''}`.trim();
+            update.father_email = cleanEmail(father.Email);
+            update.father_phone = father.MobilePhone || father.Phone || null;
+            result.parentsFound++;
+          }
+
+          // f. Update mother data
+          if (mother) {
+            update.mother_name =
+              `${mother.FirstName || ''} ${mother.LastName || ''}`.trim();
+            update.mother_email = cleanEmail(mother.Email);
+            update.mother_phone = mother.MobilePhone || mother.Phone || null;
+            result.parentsFound++;
+          }
+
+          wasEnriched = true;
+        }
+      }
+
+      // g. Apply update
+      if (wasEnriched && Object.keys(update).length > 0) {
+        const { error: updateError } = await adminClient
+          .from('profiles')
+          .update(update)
+          .eq('id', profile.id);
+
+        if (updateError) {
+          throw new Error(`Profile update failed: ${updateError.message}`);
+        }
+
+        result.enrichedFromSF++;
+      }
+    } catch (err) {
+      const name =
+        `${profile.first_name ?? ''} ${profile.last_name ?? ''}`.trim() ||
+        'Unknown';
+      result.errors.push({
+        contactId: profile.salesforce_contact_id as string,
+        name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return result;
 }

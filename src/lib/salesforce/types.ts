@@ -11,36 +11,15 @@ export interface SalesforceContact {
   School__c: string | null;
   Allergies__c: string | null;
   Behavorial_Issues__c: string | null;
-  SOM_Registration_Allowed__c: boolean;
+  Gender__c: string | null;
   AccountId: string | null;
-  Quattro_Family_Position__c: string | null;
-  Active_Registrations__c: string | null;
 }
 
-export interface SyncResult {
-  totalProcessed: number;
-  participantsCreated: number;
-  participantsUpdated: number;
-  participantsSkipped: number;
-  parentsCreated: number;
-  parentsUpdated: number;
-  parentsSkipped: number;
-  relationshipsCreated: number;
-  membershipsCreated: number;
-  errors: SyncError[];
-}
-
-export interface SyncError {
-  contactId: string;
-  contactName: string;
-  error: string;
-}
-
-export interface NewUserCredential {
-  role: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  temporaryPassword: string;
-  salesforceId: string;
+export interface EnrichResult {
+  totalProfiles: number;
+  enrichedFromSF: number;
+  parentsFound: number;
+  schoolsNormalized: number;
+  allergiesCleaned: number;
+  errors: { contactId: string; name: string; error: string }[];
 }
