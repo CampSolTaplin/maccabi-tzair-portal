@@ -65,10 +65,13 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const { sessionId, is_cancelled, is_locked } = await request.json();
+    const { sessionId, sessionIds, is_cancelled, is_locked } = await request.json();
 
-    if (!sessionId) {
-      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
+    // Support single sessionId or batch sessionIds
+    const ids: string[] = sessionIds ?? (sessionId ? [sessionId] : []);
+
+    if (ids.length === 0) {
+      return NextResponse.json({ error: 'sessionId or sessionIds is required' }, { status: 400 });
     }
 
     const supabase = createAdminClient();
@@ -84,13 +87,13 @@ export async function PATCH(request: NextRequest) {
     const { error } = await supabase
       .from('sessions')
       .update(update)
-      .eq('id', sessionId);
+      .in('id', ids);
 
     if (error) {
-      throw new Error(`Failed to update session: ${error.message}`);
+      throw new Error(`Failed to update session(s): ${error.message}`);
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, updated: ids.length });
   } catch (err) {
     console.error('Session update error:', err);
     return NextResponse.json(

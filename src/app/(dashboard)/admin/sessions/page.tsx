@@ -16,6 +16,10 @@ import {
   Sparkles,
   Filter,
   Users,
+  ChevronDown,
+  ChevronRight,
+  XCircle,
+  RotateCcw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -35,6 +39,17 @@ interface SessionRow {
   attendanceCount: number;
 }
 
+interface DateGroup {
+  date: string;
+  dayLabel: string;
+  dayNum: number;
+  monthLabel: string;
+  sessions: SessionRow[];
+  activeCount: number;
+  cancelledCount: number;
+  totalAttendance: number;
+}
+
 const AREA_TABS = [
   { key: 'all', label: 'All Groups' },
   { key: 'katan', label: 'Katan' },
@@ -44,25 +59,18 @@ const AREA_TABS = [
 
 type AreaFilter = (typeof AREA_TABS)[number]['key'];
 
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr + 'T12:00:00');
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-}
-
-function getGroupColor(area: string): string {
-  switch (area) {
-    case 'katan': return 'bg-blue-50 text-blue-700';
-    case 'noar': return 'bg-purple-50 text-purple-700';
-    case 'leadership': return 'bg-amber-50 text-amber-700';
-    default: return 'bg-gray-100 text-gray-600';
-  }
-}
+const GROUP_AREA_COLORS: Record<string, string> = {
+  katan: 'bg-blue-100 text-blue-700 border-blue-200',
+  noar: 'bg-purple-100 text-purple-700 border-purple-200',
+  leadership: 'bg-amber-100 text-amber-700 border-amber-200',
+};
 
 export default function AdminSessionsPage() {
   const queryClient = useQueryClient();
   const [areaFilter, setAreaFilter] = useState<AreaFilter>('all');
   const [generating, setGenerating] = useState(false);
   const [genResult, setGenResult] = useState<string | null>(null);
+  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
 
   const { data, isLoading, error } = useQuery<{ sessions: SessionRow[] }>({
     queryKey: ['admin-sessions'],
@@ -89,23 +97,80 @@ export default function AdminSessionsPage() {
     },
   });
 
-  const filteredSessions = useMemo(() => {
-    if (areaFilter === 'all') return sessions;
-    return sessions.filter((s) => s.groupArea === areaFilter);
+  const batchMutation = useMutation({
+    mutationFn: async ({ sessionIds, field, value }: { sessionIds: string[]; field: string; value: boolean }) => {
+      const res = await fetch('/api/admin/sessions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionIds, [field]: value }),
+      });
+      if (!res.ok) throw new Error('Failed to update sessions');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-sessions'] });
+    },
+  });
+
+  // Group sessions by date
+  const dateGroups = useMemo(() => {
+    const filtered = areaFilter === 'all' ? sessions : sessions.filter((s) => s.groupArea === areaFilter);
+    const map = new Map<string, SessionRow[]>();
+
+    for (const s of filtered) {
+      if (!map.has(s.sessionDate)) map.set(s.sessionDate, []);
+      map.get(s.sessionDate)!.push(s);
+    }
+
+    const groups: DateGroup[] = [];
+    for (const [date, dateSessions] of map) {
+      const d = new Date(date + 'T12:00:00');
+      groups.push({
+        date,
+        dayLabel: d.toLocaleDateString('en-US', { weekday: 'long' }),
+        dayNum: d.getDate(),
+        monthLabel: d.toLocaleDateString('en-US', { month: 'short' }),
+        sessions: dateSessions.sort((a, b) => a.groupName.localeCompare(b.groupName)),
+        activeCount: dateSessions.filter((s) => !s.isCancelled).length,
+        cancelledCount: dateSessions.filter((s) => s.isCancelled).length,
+        totalAttendance: dateSessions.reduce((sum, s) => sum + s.attendanceCount, 0),
+      });
+    }
+
+    return groups.sort((a, b) => a.date.localeCompare(b.date));
   }, [sessions, areaFilter]);
 
-  // Group sessions by month
-  const sessionsByMonth = useMemo(() => {
-    const map = new Map<string, SessionRow[]>();
-    for (const s of filteredSessions) {
-      const d = new Date(s.sessionDate + 'T12:00:00');
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      if (!map.has(label)) map.set(label, []);
-      map.get(label)!.push(s);
+  // Group dates by month
+  const datesByMonth = useMemo(() => {
+    const map = new Map<string, DateGroup[]>();
+    for (const dg of dateGroups) {
+      const d = new Date(dg.date + 'T12:00:00');
+      const monthKey = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      if (!map.has(monthKey)) map.set(monthKey, []);
+      map.get(monthKey)!.push(dg);
     }
     return map;
-  }, [filteredSessions]);
+  }, [dateGroups]);
+
+  function toggleDate(date: string) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(date)) next.delete(date);
+      else next.add(date);
+      return next;
+    });
+  }
+
+  function cancelAllForDate(dateGroup: DateGroup) {
+    const activeIds = dateGroup.sessions.filter((s) => !s.isCancelled).map((s) => s.id);
+    if (activeIds.length === 0) return;
+    batchMutation.mutate({ sessionIds: activeIds, field: 'is_cancelled', value: true });
+  }
+
+  function restoreAllForDate(dateGroup: DateGroup) {
+    const cancelledIds = dateGroup.sessions.filter((s) => s.isCancelled).map((s) => s.id);
+    if (cancelledIds.length === 0) return;
+    batchMutation.mutate({ sessionIds: cancelledIds, field: 'is_cancelled', value: false });
+  }
 
   async function handleGenerate() {
     if (!confirm('Generate sessions for the 2025-2026 season?\n\nThis will create sessions from Sep 13, 2025 to May 16, 2026 for all groups based on their schedules.\n\nExisting sessions will not be duplicated.')) return;
@@ -130,28 +195,40 @@ export default function AdminSessionsPage() {
 
   const totalActive = sessions.filter((s) => !s.isCancelled).length;
   const totalCancelled = sessions.filter((s) => s.isCancelled).length;
+  const uniqueDates = new Set(sessions.map((s) => s.sessionDate)).size;
+
+  const isPast = (date: string) => new Date(date + 'T23:59:59') < new Date();
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-brand-navy">Sessions</h2>
         <p className="mt-1 text-sm text-brand-muted">
-          Manage session calendar. Cancel sessions for holidays or special dates.
+          Manage session calendar. Cancel or block dates for holidays.
         </p>
       </div>
 
       {/* Summary + Generate */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <Card className="flex-1">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card>
           <CardContent className="flex items-center gap-3 py-4">
             <Calendar className="h-5 w-5 text-brand-navy" />
             <div>
-              <p className="text-2xl font-bold text-brand-dark-text">{totalActive}</p>
-              <p className="text-xs text-brand-muted">Active sessions</p>
+              <p className="text-2xl font-bold text-brand-dark-text">{uniqueDates}</p>
+              <p className="text-xs text-brand-muted">Session dates</p>
             </div>
           </CardContent>
         </Card>
-        <Card className="flex-1">
+        <Card>
+          <CardContent className="flex items-center gap-3 py-4">
+            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+            <div>
+              <p className="text-2xl font-bold text-brand-dark-text">{totalActive}</p>
+              <p className="text-xs text-brand-muted">Active</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
           <CardContent className="flex items-center gap-3 py-4">
             <Ban className="h-5 w-5 text-red-500" />
             <div>
@@ -160,8 +237,8 @@ export default function AdminSessionsPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="flex-1">
-          <CardContent className="flex items-center gap-3 py-4">
+        <Card>
+          <CardContent className="py-4">
             <Button onClick={handleGenerate} disabled={generating} className="w-full">
               {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {generating ? 'Generating...' : 'Generate Season'}
@@ -226,88 +303,187 @@ export default function AdminSessionsPage() {
         </Card>
       )}
 
-      {/* Sessions by month */}
-      {!isLoading && !error && Array.from(sessionsByMonth.entries()).map(([month, monthSessions]) => (
+      {/* Sessions grouped by month → date */}
+      {!isLoading && !error && Array.from(datesByMonth.entries()).map(([month, dates]) => (
         <div key={month}>
           <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">{month}</h3>
-          <div className="space-y-2">
-            {monthSessions.map((session) => (
-              <Card
-                key={session.id}
-                className={cn(
-                  'transition-opacity',
-                  session.isCancelled && 'opacity-50'
-                )}
-              >
-                <CardContent className="flex items-center justify-between py-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="text-center w-14 flex-shrink-0">
-                      <p className="text-xs text-brand-muted">
-                        {new Date(session.sessionDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })}
-                      </p>
-                      <p className="text-lg font-bold text-brand-dark-text">
-                        {new Date(session.sessionDate + 'T12:00:00').getDate()}
+          <div className="space-y-1.5">
+            {dates.map((dg) => {
+              const isExpanded = expandedDates.has(dg.date);
+              const allCancelled = dg.cancelledCount === dg.sessions.length;
+              const someCancelled = dg.cancelledCount > 0 && !allCancelled;
+              const past = isPast(dg.date);
+
+              return (
+                <div key={dg.date}>
+                  {/* Date row */}
+                  <div
+                    className={cn(
+                      'flex items-center gap-3 px-4 py-3 rounded-lg bg-white border cursor-pointer transition-all hover:shadow-sm',
+                      allCancelled && 'opacity-50 bg-red-50/30 border-red-100',
+                      past && !allCancelled && 'border-gray-200',
+                      !past && !allCancelled && 'border-brand-navy/10',
+                    )}
+                    onClick={() => toggleDate(dg.date)}
+                  >
+                    {/* Date badge */}
+                    <div className={cn(
+                      'text-center w-12 flex-shrink-0 rounded-lg py-1',
+                      allCancelled ? 'bg-red-50' : past ? 'bg-gray-50' : 'bg-brand-navy/5'
+                    )}>
+                      <p className="text-[10px] uppercase font-medium text-brand-muted">{dg.monthLabel}</p>
+                      <p className={cn(
+                        'text-lg font-bold',
+                        allCancelled ? 'text-red-400' : 'text-brand-dark-text'
+                      )}>
+                        {dg.dayNum}
                       </p>
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge className={getGroupColor(session.groupArea)}>
-                          {session.groupName}
-                        </Badge>
-                        {session.isCancelled && (
-                          <Badge className="bg-red-50 text-red-600">Cancelled</Badge>
+
+                    {/* Day info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-brand-dark-text">{dg.dayLabel}</span>
+                        {allCancelled && (
+                          <Badge className="bg-red-100 text-red-600 text-[10px]">All Cancelled</Badge>
                         )}
-                        {session.isLocked && (
-                          <Badge className="bg-gray-100 text-gray-600">
-                            <Lock className="h-3 w-3 mr-1" />Locked
+                        {someCancelled && (
+                          <Badge className="bg-amber-100 text-amber-700 text-[10px]">
+                            {dg.cancelledCount} cancelled
                           </Badge>
                         )}
                       </div>
-                      {session.attendanceCount > 0 && (
-                        <p className="text-xs text-brand-muted mt-0.5 flex items-center gap-1">
+                      {/* Group pills */}
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {dg.sessions.map((s) => (
+                          <span
+                            key={s.id}
+                            className={cn(
+                              'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border',
+                              s.isCancelled
+                                ? 'bg-gray-50 text-gray-400 border-gray-200 line-through'
+                                : GROUP_AREA_COLORS[s.groupArea] || 'bg-gray-100 text-gray-600 border-gray-200'
+                            )}
+                          >
+                            {s.groupName.replace('Katan - ', 'K').replace('Noar - ', 'N').replace(' Grade', '')}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Right side: attendance + expand */}
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {dg.totalAttendance > 0 && (
+                        <span className="text-xs text-brand-muted flex items-center gap-1">
                           <Users className="h-3 w-3" />
-                          {session.attendanceCount} marked
-                        </p>
+                          {dg.totalAttendance}
+                        </span>
                       )}
+                      <span className="text-brand-muted">
+                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button
-                      onClick={() => toggleMutation.mutate({
-                        sessionId: session.id,
-                        field: 'is_cancelled',
-                        value: !session.isCancelled,
-                      })}
-                      className={cn(
-                        'p-2 rounded-lg transition-colors cursor-pointer',
-                        session.isCancelled
-                          ? 'text-emerald-600 hover:bg-emerald-50'
-                          : 'text-red-500 hover:bg-red-50'
-                      )}
-                      title={session.isCancelled ? 'Restore session' : 'Cancel session'}
-                    >
-                      {session.isCancelled ? <CheckCircle2 className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
-                    </button>
-                    <button
-                      onClick={() => toggleMutation.mutate({
-                        sessionId: session.id,
-                        field: 'is_locked',
-                        value: !session.isLocked,
-                      })}
-                      className={cn(
-                        'p-2 rounded-lg transition-colors cursor-pointer',
-                        session.isLocked
-                          ? 'text-amber-600 hover:bg-amber-50'
-                          : 'text-gray-400 hover:bg-gray-50'
-                      )}
-                      title={session.isLocked ? 'Unlock session' : 'Lock session'}
-                    >
-                      {session.isLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+
+                  {/* Expanded: individual group sessions */}
+                  {isExpanded && (
+                    <div className="ml-4 mt-1 mb-3 space-y-1 border-l-2 border-brand-navy/10 pl-4">
+                      {/* Batch actions */}
+                      <div className="flex items-center gap-2 py-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); cancelAllForDate(dg); }}
+                          disabled={allCancelled || batchMutation.isPending}
+                          className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <XCircle className="h-3.5 w-3.5" />
+                          Cancel All
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); restoreAllForDate(dg); }}
+                          disabled={dg.cancelledCount === 0 || batchMutation.isPending}
+                          className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          Restore All
+                        </button>
+                      </div>
+
+                      {dg.sessions.map((session) => (
+                        <div
+                          key={session.id}
+                          className={cn(
+                            'flex items-center justify-between px-3 py-2 rounded-md bg-white border transition-opacity',
+                            session.isCancelled && 'opacity-50 bg-red-50/50 border-red-100'
+                          )}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge className={cn(
+                              'text-xs border',
+                              session.isCancelled
+                                ? 'bg-gray-50 text-gray-400 border-gray-200'
+                                : GROUP_AREA_COLORS[session.groupArea] || 'bg-gray-100 text-gray-600 border-gray-200'
+                            )}>
+                              {session.groupName}
+                            </Badge>
+                            {session.isCancelled && (
+                              <span className="text-[10px] text-red-500 font-medium">CANCELLED</span>
+                            )}
+                            {session.isLocked && (
+                              <Lock className="h-3 w-3 text-amber-500" />
+                            )}
+                            {session.attendanceCount > 0 && (
+                              <span className="text-[10px] text-brand-muted flex items-center gap-0.5">
+                                <Users className="h-3 w-3" />{session.attendanceCount}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-0.5 flex-shrink-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleMutation.mutate({
+                                  sessionId: session.id,
+                                  field: 'is_cancelled',
+                                  value: !session.isCancelled,
+                                });
+                              }}
+                              className={cn(
+                                'p-1.5 rounded-md transition-colors cursor-pointer',
+                                session.isCancelled
+                                  ? 'text-emerald-600 hover:bg-emerald-50'
+                                  : 'text-red-500 hover:bg-red-50'
+                              )}
+                              title={session.isCancelled ? 'Restore' : 'Cancel'}
+                            >
+                              {session.isCancelled ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleMutation.mutate({
+                                  sessionId: session.id,
+                                  field: 'is_locked',
+                                  value: !session.isLocked,
+                                });
+                              }}
+                              className={cn(
+                                'p-1.5 rounded-md transition-colors cursor-pointer',
+                                session.isLocked
+                                  ? 'text-amber-600 hover:bg-amber-50'
+                                  : 'text-gray-400 hover:bg-gray-50'
+                              )}
+                              title={session.isLocked ? 'Unlock' : 'Lock'}
+                            >
+                              {session.isLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}
