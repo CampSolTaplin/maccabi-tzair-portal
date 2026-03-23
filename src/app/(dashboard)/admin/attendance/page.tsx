@@ -15,6 +15,8 @@ import {
   ChevronDown,
   ChevronUp,
   Upload,
+  Ban,
+  CheckCircle2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import type { ParticipantStats } from '@/lib/attendance/stats';
@@ -23,6 +25,7 @@ interface SessionHeader {
   id: string;
   date: string;
   isLocked: boolean;
+  isCancelled: boolean;
 }
 
 interface StatsResponse {
@@ -79,7 +82,6 @@ function getPercentageBg(pct: number): string {
 const STATUS_COLORS: Record<string, { bg: string; ring: string; label: string }> = {
   present: { bg: 'bg-emerald-500', ring: 'ring-emerald-300', label: 'P' },
   late: { bg: 'bg-amber-400', ring: 'ring-amber-200', label: 'L' },
-  absent: { bg: 'bg-red-400', ring: 'ring-red-200', label: 'A' },
   excused: { bg: 'bg-gray-400', ring: 'ring-gray-200', label: 'E' },
 };
 
@@ -170,6 +172,22 @@ export default function AdminAttendancePage() {
     },
   });
 
+  // Session cancel/restore mutation
+  const sessionMutation = useMutation({
+    mutationFn: async ({ sessionId, isCancelled }: { sessionId: string; isCancelled: boolean }) => {
+      const res = await fetch('/api/admin/sessions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, is_cancelled: isCancelled }),
+      });
+      if (!res.ok) throw new Error('Failed to update session');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-attendance-stats', effectiveGroupId] });
+      queryClient.invalidateQueries({ queryKey: ['admin-sessions'] });
+    },
+  });
+
   const handleToggle = useCallback(
     (sessionId: string, participantId: string, currentStatus: string | null) => {
       toggleMutation.mutate({ sessionId, participantId, currentStatus });
@@ -253,7 +271,7 @@ export default function AdminAttendancePage() {
         <div>
           <h2 className="text-2xl font-bold text-brand-navy">Attendance</h2>
           <p className="mt-1 text-sm text-brand-muted">
-            Click any cell to cycle status: P → L → A → E → clear
+            Click any cell to cycle: P → L → E → clear. Empty = absent.
           </p>
         </div>
         <div>
@@ -313,8 +331,8 @@ export default function AdminAttendancePage() {
             <CardContent className="flex items-center gap-3 py-4">
               <ClipboardCheck className="h-5 w-5 text-blue-500" />
               <div>
-                <p className="text-2xl font-bold text-brand-dark-text">{sessions.length}</p>
-                <p className="text-xs text-brand-muted">Sessions</p>
+                <p className="text-2xl font-bold text-brand-dark-text">{sessions.filter(s => !s.isCancelled).length}</p>
+                <p className="text-xs text-brand-muted">Active Sessions</p>
               </div>
             </CardContent>
           </Card>
@@ -397,7 +415,7 @@ export default function AdminAttendancePage() {
                       </th>
                     ))}
                   </tr>
-                  {/* Date number row */}
+                  {/* Date number row + cancel/restore toggle */}
                   <tr className="border-b-2 border-gray-200">
                     <th
                       style={{ minWidth: NAME_W }}
@@ -420,8 +438,27 @@ export default function AdminAttendancePage() {
                       </span>
                     </th>
                     {sessions.map((s) => (
-                      <th key={s.id} style={{ width: CELL_W }} className="pb-2 text-center font-medium text-brand-muted text-[10px]">
-                        {getDayNum(s.date)}
+                      <th key={s.id} style={{ width: CELL_W }} className="pb-2 text-center">
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span className={cn(
+                            'font-medium text-[10px]',
+                            s.isCancelled ? 'text-red-400 line-through' : 'text-brand-muted'
+                          )}>
+                            {getDayNum(s.date)}
+                          </span>
+                          <button
+                            onClick={() => sessionMutation.mutate({ sessionId: s.id, isCancelled: !s.isCancelled })}
+                            className={cn(
+                              'w-4 h-4 rounded flex items-center justify-center cursor-pointer transition-colors',
+                              s.isCancelled
+                                ? 'text-red-400 hover:text-emerald-500 hover:bg-emerald-50'
+                                : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
+                            )}
+                            title={s.isCancelled ? 'Restore session' : 'Cancel session'}
+                          >
+                            {s.isCancelled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                          </button>
+                        </div>
                       </th>
                     ))}
                   </tr>
@@ -455,13 +492,17 @@ export default function AdminAttendancePage() {
                         </span>
                       </td>
                       {sessions.map((s) => (
-                        <td key={s.id} style={{ width: CELL_W }} className="py-1 text-center">
+                        <td key={s.id} style={{ width: CELL_W }} className={cn('py-1 text-center', s.isCancelled && 'bg-gray-50/80')}>
+                          {s.isCancelled ? (
+                            <span className="w-5 h-5 inline-block text-gray-300" title="Cancelled">—</span>
+                          ) : (
                           <StatusCell
                             status={p.records[s.id]}
                             sessionId={s.id}
                             participantId={p.id}
                             onToggle={handleToggle}
                           />
+                          )}
                         </td>
                       ))}
                     </tr>
@@ -482,7 +523,11 @@ export default function AdminAttendancePage() {
               ))}
               <span className="flex items-center gap-1">
                 <span className="w-4 h-4 rounded-md bg-gray-100 border border-gray-200 border-dashed" />
-                No data
+                Absent (no record)
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-gray-50 text-gray-300 text-[9px] flex items-center justify-center">—</span>
+                Cancelled
               </span>
             </div>
           </CardContent>

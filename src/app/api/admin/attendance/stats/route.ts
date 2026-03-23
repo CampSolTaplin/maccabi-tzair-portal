@@ -63,13 +63,14 @@ export async function GET(request: NextRequest) {
     // Sort by last name
     participantStats.sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
 
-    // Session info for grid headers (only non-cancelled past sessions)
+    // Session info for grid headers — past sessions (both active and cancelled)
     const sessionHeaders = (sessions ?? [])
-      .filter((s) => !s.is_cancelled && s.session_date <= today)
+      .filter((s) => s.session_date <= today)
       .map((s) => ({
         id: s.id,
         date: s.session_date,
         isLocked: s.is_locked,
+        isCancelled: s.is_cancelled,
       }));
 
     return NextResponse.json({

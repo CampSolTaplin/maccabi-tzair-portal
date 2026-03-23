@@ -152,7 +152,8 @@ export async function POST(request: NextRequest) {
 
       for (const dc of dateColumns) {
         const cellValue = String(row[dc.index] ?? '').trim().toUpperCase();
-        if (cellValue !== 'P' && cellValue !== 'A') continue;
+        // Only import P (present) and L (late). A (absent) is implicit — no record means absent.
+        if (cellValue !== 'P' && cellValue !== 'L' && cellValue !== 'E') continue;
 
         const sessionId = sessionMap.get(dc.date);
         if (!sessionId) {
@@ -160,7 +161,7 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        const status = cellValue === 'P' ? 'present' : 'absent';
+        const status = cellValue === 'P' ? 'present' : cellValue === 'L' ? 'late' : 'excused';
 
         const { error: upsertError } = await supabase
           .from('attendance_records')

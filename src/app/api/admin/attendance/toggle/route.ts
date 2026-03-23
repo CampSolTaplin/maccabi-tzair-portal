@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
-// Cycle: null → present → late → absent → excused → null
-const STATUS_CYCLE = ['present', 'late', 'absent', 'excused', null] as const;
+// Cycle: null → present → late → excused → null (no absent — absence is implicit)
+const STATUS_CYCLE = ['present', 'late', 'excused', null] as const;
 
 export async function PATCH(request: NextRequest) {
   try {
