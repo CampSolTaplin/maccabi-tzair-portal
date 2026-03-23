@@ -681,6 +681,7 @@ function GroupCard({
   group,
   expanded,
   onToggle,
+  onDelete,
   searchQuery,
   visibleColumns,
   activeColumns,
@@ -688,6 +689,7 @@ function GroupCard({
   group: GroupWithMembers;
   expanded: boolean;
   onToggle: () => void;
+  onDelete: (groupId: string, groupName: string) => void;
   searchQuery: string;
   visibleColumns: Record<string, boolean>;
   activeColumns: ColumnDef[];
@@ -758,6 +760,16 @@ function GroupCard({
               aria-label={`Export ${group.name} as CSV`}
             >
               <Download className="h-3.5 w-3.5" />
+            </button>
+            {/* Delete group */}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDelete(group.id, group.name); }}
+              className="hidden sm:inline-flex items-center justify-center h-7 w-7 rounded-md text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors cursor-pointer print:hidden"
+              title={`Delete ${group.name}`}
+              aria-label={`Delete ${group.name}`}
+            >
+              <XCircle className="h-3.5 w-3.5" />
             </button>
             <Badge className="bg-brand-navy/10 text-brand-navy font-semibold text-sm px-3">
               {displayCount}
@@ -886,6 +898,51 @@ export default function AdminGroupsPage() {
   });
 
   const groups = data?.groups ?? [];
+
+  // Delete group handler
+  async function handleDeleteGroup(groupId: string, groupName: string) {
+    try {
+      // First check dependencies
+      const checkRes = await fetch('/api/admin/groups', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId, confirm: false }),
+      });
+      const checkData = await checkRes.json();
+
+      if (checkData.dependencies) {
+        const d = checkData.dependencies;
+        const warnings = [];
+        if (d.members > 0) warnings.push(`${d.members} members`);
+        if (d.sessions > 0) warnings.push(`${d.sessions} sessions`);
+        if (d.attendanceRecords > 0) warnings.push(`${d.attendanceRecords} attendance records`);
+        if (d.eventLinks > 0) warnings.push(`${d.eventLinks} event links`);
+
+        const msg = warnings.length > 0
+          ? `⚠️ Deleting "${groupName}" will also delete:\n\n• ${warnings.join('\n• ')}\n\nThis action CANNOT be undone. Are you sure?`
+          : `Delete "${groupName}"? This action cannot be undone.`;
+
+        if (!confirm(msg)) return;
+      }
+
+      // Confirmed — delete
+      const delRes = await fetch('/api/admin/groups', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId, confirm: true }),
+      });
+
+      if (!delRes.ok) {
+        const err = await delRes.json();
+        alert('Error: ' + (err.error || 'Failed to delete'));
+        return;
+      }
+
+      refetch();
+    } catch (err) {
+      alert('Error: ' + (err instanceof Error ? err.message : 'Unknown'));
+    }
+  }
 
   // Filter groups by area
   const filteredGroups = useMemo(() => {
@@ -1137,6 +1194,7 @@ export default function AdminGroupsPage() {
                 group={group}
                 expanded={expandedGroups.has(group.id)}
                 onToggle={() => toggleGroup(group.id)}
+                onDelete={handleDeleteGroup}
                 searchQuery={searchQuery}
                 visibleColumns={visibleColumns}
                 activeColumns={activeColumns}

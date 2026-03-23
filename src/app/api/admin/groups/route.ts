@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -173,6 +173,94 @@ export async function GET() {
     console.error('Groups API error:', err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to load groups' },
+      { status: 500 }
+    );
+  }
+}
+
+// Check dependencies before deleting, then delete
+export async function DELETE(request: NextRequest) {
+  try {
+    const { groupId, confirm } = await request.json();
+    if (!groupId) return NextResponse.json({ error: 'groupId required' }, { status: 400 });
+
+    const supabase = createAdminClient();
+
+    // Count dependencies
+    const { count: memberCount } = await supabase
+      .from('group_memberships')
+      .select('id', { count: 'exact', head: true })
+      .eq('group_id', groupId);
+
+    const { count: sessionCount } = await supabase
+      .from('sessions')
+      .select('id', { count: 'exact', head: true })
+      .eq('group_id', groupId);
+
+    const { count: eventLinkCount } = await supabase
+      .from('event_groups')
+      .select('event_id', { count: 'exact', head: true })
+      .eq('group_id', groupId);
+
+    // Count attendance records across sessions
+    const { data: sessionIds } = await supabase
+      .from('sessions')
+      .select('id')
+      .eq('group_id', groupId);
+
+    let attendanceCount = 0;
+    if (sessionIds?.length) {
+      for (let i = 0; i < sessionIds.length; i += 50) {
+        const chunk = sessionIds.slice(i, i + 50).map(s => s.id);
+        const { count } = await supabase
+          .from('attendance_records')
+          .select('id', { count: 'exact', head: true })
+          .in('session_id', chunk);
+        attendanceCount += count ?? 0;
+      }
+    }
+
+    // If not confirmed, return the dependency summary
+    if (!confirm) {
+      return NextResponse.json({
+        dependencies: {
+          members: memberCount ?? 0,
+          sessions: sessionCount ?? 0,
+          attendanceRecords: attendanceCount,
+          eventLinks: eventLinkCount ?? 0,
+        },
+      });
+    }
+
+    // Confirmed — delete everything in order
+    // 1. Delete attendance records
+    if (sessionIds?.length) {
+      for (let i = 0; i < sessionIds.length; i += 50) {
+        const chunk = sessionIds.slice(i, i + 50).map(s => s.id);
+        await supabase.from('attendance_records').delete().in('session_id', chunk);
+      }
+    }
+
+    // 2. Delete sessions
+    await supabase.from('sessions').delete().eq('group_id', groupId);
+
+    // 3. Delete event links
+    await supabase.from('event_groups').delete().eq('group_id', groupId);
+
+    // 4. Delete memberships
+    await supabase.from('group_memberships').delete().eq('group_id', groupId);
+
+    // 5. Delete schedules
+    await supabase.from('schedules').delete().eq('group_id', groupId);
+
+    // 6. Delete the group
+    await supabase.from('groups').delete().eq('id', groupId);
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error('Group delete error:', err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Delete failed' },
       { status: 500 }
     );
   }

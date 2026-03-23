@@ -46,7 +46,7 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
     { label: 'Groups', href: '/admin/groups', icon: Layers },
     { label: 'Attendance', href: '/admin/attendance', icon: ClipboardCheck },
     { label: 'Sessions', href: '/admin/sessions', icon: Calendar },
-    { label: 'Madrichim', href: '/admin/madrichim', icon: Users },
+    { label: 'Users', href: '/admin/madrichim', icon: Users },
     { label: 'Events', href: '/admin/events', icon: PartyPopper },
     { label: 'Community Hours', href: '/admin/hours', icon: Clock },
     { label: 'Settings', href: '/admin/settings', icon: Settings, disabled: true },
