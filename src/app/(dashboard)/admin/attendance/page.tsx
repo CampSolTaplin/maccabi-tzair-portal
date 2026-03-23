@@ -17,6 +17,8 @@ import {
   Upload,
   Ban,
   CheckCircle2,
+  UserX,
+  UserCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import type { ParticipantStats } from '@/lib/attendance/stats';
@@ -187,6 +189,21 @@ export default function AdminAttendancePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-attendance-stats', effectiveGroupId] });
       queryClient.invalidateQueries({ queryKey: ['admin-sessions'] });
+    },
+  });
+
+  // Dropout toggle mutation
+  const dropoutMutation = useMutation({
+    mutationFn: async ({ participantId, isDropout }: { participantId: string; isDropout: boolean }) => {
+      const res = await fetch('/api/admin/attendance/dropout', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId, groupId: effectiveGroupId, isDropout }),
+      });
+      if (!res.ok) throw new Error('Failed to toggle dropout');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-attendance-stats', effectiveGroupId] });
     },
   });
 
@@ -502,14 +519,23 @@ export default function AdminAttendancePage() {
                       )}
                     >
                       <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-white py-1 pl-4 pr-2 whitespace-nowrap">
-                        <span className="font-medium text-xs text-brand-dark-text">
-                          {p.lastName}, {p.firstName}
-                        </span>
-                        {p.consecutiveAbsences >= 2 && (
-                          <Badge className="ml-1.5 bg-red-100 text-red-700 text-[8px] px-1 py-0">
-                            {p.consecutiveAbsences}x
-                          </Badge>
-                        )}
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => dropoutMutation.mutate({ participantId: p.id, isDropout: true })}
+                            className="p-0.5 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 cursor-pointer transition-colors flex-shrink-0"
+                            title="Mark as dropout"
+                          >
+                            <UserX className="h-3 w-3" />
+                          </button>
+                          <span className="font-medium text-xs text-brand-dark-text truncate">
+                            {p.lastName}, {p.firstName}
+                          </span>
+                          {p.consecutiveAbsences >= 2 && (
+                            <Badge className="ml-0.5 bg-red-100 text-red-700 text-[8px] px-1 py-0 flex-shrink-0">
+                              {p.consecutiveAbsences}x
+                            </Badge>
+                          )}
+                        </div>
                       </td>
                       <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-white py-1 px-1 text-center border-r-2 border-gray-200">
                         <span className={cn(
@@ -560,12 +586,21 @@ export default function AdminAttendancePage() {
                       className="border-b border-gray-50 opacity-50"
                     >
                       <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-white py-1 pl-4 pr-2 whitespace-nowrap">
-                        <span className="font-medium text-xs text-gray-400">
-                          {p.lastName}, {p.firstName}
-                        </span>
-                        <Badge className="ml-1.5 bg-gray-100 text-gray-500 text-[8px] px-1 py-0">
-                          dropout
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => dropoutMutation.mutate({ participantId: p.id, isDropout: false })}
+                            className="p-0.5 rounded text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 cursor-pointer transition-colors flex-shrink-0"
+                            title="Restore to active"
+                          >
+                            <UserCheck className="h-3 w-3" />
+                          </button>
+                          <span className="font-medium text-xs text-gray-400 truncate">
+                            {p.lastName}, {p.firstName}
+                          </span>
+                          <Badge className="ml-0.5 bg-gray-100 text-gray-500 text-[8px] px-1 py-0 flex-shrink-0">
+                            dropout
+                          </Badge>
+                        </div>
                       </td>
                       <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-white py-1 px-1 text-center border-r-2 border-gray-200">
                         <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold text-gray-400 bg-gray-50">
