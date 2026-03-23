@@ -72,25 +72,26 @@ export function computeAttendanceStats(
       allRecords[s.id] = rec?.status ?? null;
     }
 
-    // Count stats only from eligible sessions
+    // Count stats only from sessions where attendance was actually taken for this participant
+    let sessionsWithAttendance = 0;
     for (const s of eligibleSessions) {
       const status = pRecords.get(s.id);
       if (!status) {
-        // No record = absent (unmarked)
-        absent++;
-      } else {
-        switch (status) {
-          case 'present': present++; break;
-          case 'late': late++; break;
-          case 'absent': absent++; break;
-          case 'excused': excused++; break;
-        }
+        // No record = no attendance taken for this session, don't count
+        continue;
+      }
+      sessionsWithAttendance++;
+      switch (status) {
+        case 'present': present++; break;
+        case 'late': late++; break;
+        case 'absent': absent++; break;
+        case 'excused': excused++; break;
       }
     }
 
-    const total = eligibleSessions.length;
+    const total = sessionsWithAttendance;
     const denominator = total - excused;
-    const percentage = denominator > 0 ? Math.round(((present + late) / denominator) * 100) : 0;
+    const percentage = denominator > 0 ? Math.round((present / denominator) * 100) : 0;
 
     // Consecutive absences: walk backwards through eligible sessions
     let consecutiveAbsences = 0;

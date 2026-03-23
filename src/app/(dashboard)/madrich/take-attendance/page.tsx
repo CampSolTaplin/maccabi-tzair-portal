@@ -7,7 +7,6 @@ import {
   Search,
   CheckCircle2,
   Clock,
-  XCircle,
   AlertCircle,
   Loader2,
   Lock,
@@ -46,7 +45,6 @@ const statusConfig: {
 }[] = [
   { value: 'present', icon: CheckCircle2, label: 'Present', color: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200' },
   { value: 'late', icon: Clock, label: 'Late', color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200' },
-  { value: 'absent', icon: XCircle, label: 'Absent', color: 'text-red-500', bg: 'bg-red-50 border-red-200' },
   { value: 'excused', icon: AlertCircle, label: 'Excused', color: 'text-gray-500', bg: 'bg-gray-50 border-gray-200' },
 ];
 
@@ -459,18 +457,18 @@ export default function TakeAttendancePage() {
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="rounded-xl bg-white shadow-sm divide-y divide-gray-100">
         {filteredMembers.map((member) => (
-          <div key={member.id} className="rounded-xl bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <p className="font-medium text-brand-dark-text">
+          <div key={member.id} className="flex items-center justify-between py-2 px-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <p className="font-medium text-sm text-brand-dark-text truncate">
                 {member.firstName} {member.lastName}
               </p>
               {member.saving && (
-                <Loader2 className="h-4 w-4 animate-spin text-brand-muted" />
+                <Loader2 className="h-3 w-3 animate-spin text-brand-muted flex-shrink-0" />
               )}
             </div>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="flex items-center gap-1.5 flex-shrink-0">
               {statusConfig.map((cfg) => {
                 const Icon = cfg.icon;
                 const isSelected = member.status === cfg.value;
@@ -480,14 +478,14 @@ export default function TakeAttendancePage() {
                     onClick={() => setStatus(member.id, cfg.value)}
                     disabled={locked}
                     className={cn(
-                      'flex flex-col items-center gap-1 rounded-lg border py-2 text-[11px] font-medium transition-all',
+                      'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all',
                       isSelected
                         ? `${cfg.bg} ${cfg.color} border-current`
-                        : 'border-gray-100 text-brand-muted hover:bg-gray-50',
+                        : 'border-gray-200 text-brand-muted hover:bg-gray-50',
                       locked && 'cursor-not-allowed opacity-60'
                     )}
                   >
-                    <Icon className="h-4 w-4" />
+                    <Icon className="h-3 w-3" />
                     <span>{cfg.label}</span>
                   </button>
                 );

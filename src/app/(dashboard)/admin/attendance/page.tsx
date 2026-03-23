@@ -49,15 +49,15 @@ function getPercentageColor(pct: number): string {
 function getStatusDot(status: string | null): React.ReactNode {
   switch (status) {
     case 'present':
-      return <span className="inline-block h-3 w-3 rounded-full bg-emerald-500" title="Present" />;
+      return <span className="inline-block h-4 w-4 rounded-full bg-emerald-500" title="Present" />;
     case 'late':
-      return <span className="inline-block h-3 w-3 rounded-full bg-amber-400" title="Late" />;
+      return <span className="inline-block h-4 w-4 rounded-full bg-amber-400" title="Late" />;
     case 'absent':
-      return <span className="inline-block h-3 w-3 rounded-full bg-red-400" title="Absent" />;
+      return <span className="inline-block h-4 w-4 rounded-full bg-red-400" title="Absent" />;
     case 'excused':
-      return <span className="inline-block h-3 w-3 rounded-full bg-gray-300" title="Excused" />;
+      return <span className="inline-block h-4 w-4 rounded-full bg-gray-300" title="Excused" />;
     default:
-      return <span className="inline-block h-3 w-3 rounded-full bg-gray-100" title="No data" />;
+      return <span className="inline-block h-4 w-4 rounded-full bg-gray-100 border border-gray-200" title="No data" />;
   }
 }
 
@@ -226,13 +226,13 @@ export default function AdminAttendancePage() {
       {/* Attendance grid */}
       {!isLoading && !error && sessions.length > 0 && (
         <Card>
-          <CardContent className="py-4">
-            <div className="overflow-x-auto -mx-6 px-6">
-              <table className="w-full text-sm">
+          <CardContent className="py-4 px-0">
+            <div className="overflow-x-auto">
+              <table className="text-sm border-collapse" style={{ minWidth: `${200 + sessions.length * 52}px` }}>
                 <thead>
-                  <tr className="border-b border-gray-200">
+                  <tr className="border-b-2 border-gray-200">
                     <th
-                      className="pb-2 pr-4 text-left font-medium text-brand-muted text-xs cursor-pointer hover:text-brand-dark-text select-none"
+                      className="sticky left-0 z-10 bg-white pb-3 pl-6 pr-4 text-left font-semibold text-brand-dark-text text-sm cursor-pointer hover:text-brand-navy select-none min-w-[180px]"
                       onClick={() => toggleSort('name')}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -241,7 +241,7 @@ export default function AdminAttendancePage() {
                       </span>
                     </th>
                     <th
-                      className="pb-2 pr-4 text-center font-medium text-brand-muted text-xs cursor-pointer hover:text-brand-dark-text select-none w-16"
+                      className="sticky left-[180px] z-10 bg-white pb-3 px-3 text-center font-semibold text-brand-dark-text text-sm cursor-pointer hover:text-brand-navy select-none min-w-[52px]"
                       onClick={() => toggleSort('percentage')}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -250,7 +250,7 @@ export default function AdminAttendancePage() {
                       </span>
                     </th>
                     {sessions.map((s) => (
-                      <th key={s.id} className="pb-2 text-center font-medium text-brand-muted text-[10px] w-8 whitespace-nowrap">
+                      <th key={s.id} className="pb-3 px-1 text-center font-medium text-brand-muted text-xs min-w-[48px] whitespace-nowrap">
                         {formatShortDate(s.date)}
                       </th>
                     ))}
@@ -261,27 +261,27 @@ export default function AdminAttendancePage() {
                     <tr
                       key={p.id}
                       className={cn(
-                        'border-b border-gray-50 last:border-0',
-                        p.consecutiveAbsences >= 2 && 'bg-red-50/50'
+                        'border-b border-gray-100 hover:bg-gray-50/50 transition-colors',
+                        p.consecutiveAbsences >= 2 && 'bg-red-50/40'
                       )}
                     >
-                      <td className="py-2 pr-4 whitespace-nowrap">
-                        <span className="font-medium text-brand-dark-text">
+                      <td className="sticky left-0 z-10 bg-inherit py-2.5 pl-6 pr-4 whitespace-nowrap min-w-[180px]">
+                        <span className="font-medium text-sm text-brand-dark-text">
                           {p.firstName} {p.lastName}
                         </span>
                         {p.consecutiveAbsences >= 2 && (
                           <Badge className="ml-2 bg-red-100 text-red-700 text-[10px]">
-                            {p.consecutiveAbsences} absent
+                            {p.consecutiveAbsences}x absent
                           </Badge>
                         )}
                       </td>
-                      <td className="py-2 pr-4 text-center">
-                        <span className={cn('font-semibold text-xs', getPercentageColor(p.stats.percentage))}>
+                      <td className="sticky left-[180px] z-10 bg-inherit py-2.5 px-3 text-center min-w-[52px]">
+                        <span className={cn('font-bold text-sm', getPercentageColor(p.stats.percentage))}>
                           {p.stats.percentage}%
                         </span>
                       </td>
                       {sessions.map((s) => (
-                        <td key={s.id} className="py-2 text-center">
+                        <td key={s.id} className="py-2.5 px-1 text-center min-w-[48px]">
                           {getStatusDot(p.records[s.id])}
                         </td>
                       ))}
@@ -292,18 +292,21 @@ export default function AdminAttendancePage() {
             </div>
 
             {/* Legend */}
-            <div className="mt-4 pt-3 border-t border-gray-100 flex items-center gap-4 text-xs text-brand-muted">
+            <div className="mt-4 pt-3 mx-6 border-t border-gray-100 flex items-center gap-5 text-sm text-brand-muted">
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-full bg-emerald-500" /> Present
+                <span className="h-3.5 w-3.5 rounded-full bg-emerald-500" /> Present
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-full bg-amber-400" /> Late
+                <span className="h-3.5 w-3.5 rounded-full bg-amber-400" /> Late
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-full bg-red-400" /> Absent
+                <span className="h-3.5 w-3.5 rounded-full bg-red-400" /> Absent
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-full bg-gray-300" /> Excused
+                <span className="h-3.5 w-3.5 rounded-full bg-gray-300" /> Excused
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-3.5 w-3.5 rounded-full bg-gray-100 border border-gray-200" /> No data
               </span>
             </div>
           </CardContent>
