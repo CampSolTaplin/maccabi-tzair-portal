@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useMemo, useRef, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   ClipboardCheck,
   AlertTriangle,
@@ -13,6 +14,7 @@ import {
   TrendingUp,
   ChevronDown,
   ChevronUp,
+  Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import type { ParticipantStats } from '@/lib/attendance/stats';
@@ -35,9 +37,31 @@ interface GroupOption {
   area: string;
 }
 
-function formatShortDate(dateStr: string): string {
+function getDayAbbr(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00');
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+  const day = d.getDay();
+  if (day === 6) return 'Sat';
+  if (day === 3) return 'Wed';
+  if (day === 1) return 'Mon';
+  return d.toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+function getDayColor(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  const day = d.getDay();
+  if (day === 6) return 'text-blue-600';
+  if (day === 3) return 'text-amber-600';
+  if (day === 1) return 'text-emerald-600';
+  return 'text-brand-muted';
+}
+
+function getMonthLabel(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { month: 'short' });
+}
+
+function getDayNum(dateStr: string): number {
+  return new Date(dateStr + 'T12:00:00').getDate();
 }
 
 function getPercentageColor(pct: number): string {
@@ -46,25 +70,57 @@ function getPercentageColor(pct: number): string {
   return 'text-red-600';
 }
 
-function getStatusDot(status: string | null): React.ReactNode {
-  switch (status) {
-    case 'present':
-      return <span className="inline-block h-4 w-4 rounded-full bg-emerald-500" title="Present" />;
-    case 'late':
-      return <span className="inline-block h-4 w-4 rounded-full bg-amber-400" title="Late" />;
-    case 'absent':
-      return <span className="inline-block h-4 w-4 rounded-full bg-red-400" title="Absent" />;
-    case 'excused':
-      return <span className="inline-block h-4 w-4 rounded-full bg-gray-300" title="Excused" />;
-    default:
-      return <span className="inline-block h-4 w-4 rounded-full bg-gray-100 border border-gray-200" title="No data" />;
-  }
+function getPercentageBg(pct: number): string {
+  if (pct >= 80) return 'bg-emerald-50';
+  if (pct >= 60) return 'bg-amber-50';
+  return 'bg-red-50';
+}
+
+const STATUS_COLORS: Record<string, { bg: string; ring: string; label: string }> = {
+  present: { bg: 'bg-emerald-500', ring: 'ring-emerald-300', label: 'P' },
+  late: { bg: 'bg-amber-400', ring: 'ring-amber-200', label: 'L' },
+  absent: { bg: 'bg-red-400', ring: 'ring-red-200', label: 'A' },
+  excused: { bg: 'bg-gray-400', ring: 'ring-gray-200', label: 'E' },
+};
+
+function StatusCell({
+  status,
+  sessionId,
+  participantId,
+  onToggle,
+}: {
+  status: string | null;
+  sessionId: string;
+  participantId: string;
+  onToggle: (sessionId: string, participantId: string, currentStatus: string | null) => void;
+}) {
+  const config = status ? STATUS_COLORS[status] : null;
+
+  return (
+    <button
+      onClick={() => onToggle(sessionId, participantId, status)}
+      className="w-7 h-7 rounded-md flex items-center justify-center cursor-pointer transition-all hover:scale-110 hover:ring-2 hover:ring-offset-1 active:scale-95"
+      title={`Click to change (current: ${status || 'none'})`}
+    >
+      {config ? (
+        <span className={cn('w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white', config.bg, `hover:${config.ring}`)}>
+          {config.label}
+        </span>
+      ) : (
+        <span className="w-5 h-5 rounded-md bg-gray-100 border border-gray-200 border-dashed" />
+      )}
+    </button>
+  );
 }
 
 export default function AdminAttendancePage() {
+  const queryClient = useQueryClient();
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'name' | 'percentage'>('name');
   const [sortAsc, setSortAsc] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch groups
   const { data: groupsData } = useQuery<{ groups: GroupOption[] }>({
@@ -82,11 +138,9 @@ export default function AdminAttendancePage() {
   });
 
   const groups = groupsData?.groups ?? [];
-
-  // Auto-select first group
   const effectiveGroupId = selectedGroupId ?? groups[0]?.id ?? null;
 
-  // Fetch attendance stats for selected group
+  // Fetch attendance stats
   const { data: statsData, isLoading, error } = useQuery<StatsResponse>({
     queryKey: ['admin-attendance-stats', effectiveGroupId],
     queryFn: async () => {
@@ -99,6 +153,29 @@ export default function AdminAttendancePage() {
 
   const sessions = statsData?.sessions ?? [];
   const participants = statsData?.participants ?? [];
+
+  // Toggle attendance mutation
+  const toggleMutation = useMutation({
+    mutationFn: async ({ sessionId, participantId, currentStatus }: { sessionId: string; participantId: string; currentStatus: string | null }) => {
+      const res = await fetch('/api/admin/attendance/toggle', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, participantId, currentStatus }),
+      });
+      if (!res.ok) throw new Error('Failed to toggle attendance');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-attendance-stats', effectiveGroupId] });
+    },
+  });
+
+  const handleToggle = useCallback(
+    (sessionId: string, participantId: string, currentStatus: string | null) => {
+      toggleMutation.mutate({ sessionId, participantId, currentStatus });
+    },
+    [toggleMutation]
+  );
 
   // Sort participants
   const sortedParticipants = useMemo(() => {
@@ -117,6 +194,22 @@ export default function AdminAttendancePage() {
     return sorted;
   }, [participants, sortBy, sortAsc]);
 
+  // Group sessions by month for header
+  const sessionsByMonth = useMemo(() => {
+    const groups: { month: string; sessions: SessionHeader[] }[] = [];
+    let currentMonth = '';
+    for (const s of sessions) {
+      const month = getMonthLabel(s.date);
+      if (month !== currentMonth) {
+        groups.push({ month, sessions: [s] });
+        currentMonth = month;
+      } else {
+        groups[groups.length - 1].sessions.push(s);
+      }
+    }
+    return groups;
+  }, [sessions]);
+
   // Summary stats
   const avgPercentage = participants.length > 0
     ? Math.round(participants.reduce((s, p) => s + p.stats.percentage, 0) / participants.length)
@@ -124,22 +217,66 @@ export default function AdminAttendancePage() {
   const flaggedCount = participants.filter((p) => p.consecutiveAbsences >= 2).length;
 
   function toggleSort(field: 'name' | 'percentage') {
-    if (sortBy === field) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortBy(field);
-      setSortAsc(field === 'name');
+    if (sortBy === field) setSortAsc(!sortAsc);
+    else { setSortBy(field); setSortAsc(field === 'name'); }
+  }
+
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !effectiveGroupId) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('group_id', effectiveGroupId);
+      const res = await fetch('/api/admin/attendance/import', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Import failed');
+      setImportResult(`Imported ${data.imported} records. ${data.skipped?.length ? `Skipped: ${data.skipped.join(', ')}` : ''}`);
+      queryClient.invalidateQueries({ queryKey: ['admin-attendance-stats', effectiveGroupId] });
+    } catch (err) {
+      setImportResult(`Error: ${err instanceof Error ? err.message : 'Import failed'}`);
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }
 
+  const CELL_W = 32; // px per session column
+  const NAME_W = 200;
+  const PCT_W = 56;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-brand-navy">Attendance</h2>
-        <p className="mt-1 text-sm text-brand-muted">
-          View attendance stats and identify at-risk participants
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-brand-navy">Attendance</h2>
+          <p className="mt-1 text-sm text-brand-muted">
+            Click any cell to cycle status: P → L → A → E → clear
+          </p>
+        </div>
+        <div>
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing || !effectiveGroupId}
+          >
+            {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            Import XLSX
+          </Button>
+        </div>
       </div>
+
+      {importResult && (
+        <div className={cn(
+          'rounded-lg px-4 py-3 text-sm',
+          importResult.startsWith('Error') ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'
+        )}>
+          {importResult}
+        </div>
+      )}
 
       {/* Group selector */}
       <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm border border-gray-100 flex-wrap">
@@ -162,13 +299,22 @@ export default function AdminAttendancePage() {
 
       {/* Summary cards */}
       {!isLoading && !error && effectiveGroupId && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <Card>
             <CardContent className="flex items-center gap-3 py-4">
               <Users className="h-5 w-5 text-brand-navy" />
               <div>
                 <p className="text-2xl font-bold text-brand-dark-text">{participants.length}</p>
                 <p className="text-xs text-brand-muted">Participants</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 py-4">
+              <ClipboardCheck className="h-5 w-5 text-blue-500" />
+              <div>
+                <p className="text-2xl font-bold text-brand-dark-text">{sessions.length}</p>
+                <p className="text-xs text-brand-muted">Sessions</p>
               </div>
             </CardContent>
           </Card>
@@ -186,21 +332,19 @@ export default function AdminAttendancePage() {
               <AlertTriangle className={cn('h-5 w-5', flaggedCount > 0 ? 'text-red-500' : 'text-gray-300')} />
               <div>
                 <p className={cn('text-2xl font-bold', flaggedCount > 0 ? 'text-red-600' : 'text-brand-dark-text')}>{flaggedCount}</p>
-                <p className="text-xs text-brand-muted">Need Follow-up (2+ absences)</p>
+                <p className="text-xs text-brand-muted">2+ absences</p>
               </div>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Loading */}
       {isLoading && (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-brand-navy" />
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <Card className="border-red-200 bg-red-50">
           <CardContent className="flex items-center gap-3 py-6">
@@ -210,15 +354,12 @@ export default function AdminAttendancePage() {
         </Card>
       )}
 
-      {/* No data */}
       {!isLoading && !error && effectiveGroupId && sessions.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <ClipboardCheck className="h-12 w-12 text-brand-muted/40" />
             <p className="mt-3 text-sm font-medium text-brand-muted">No attendance data yet</p>
-            <p className="text-xs text-brand-muted mt-1">
-              Generate sessions and take attendance to see stats here
-            </p>
+            <p className="text-xs text-brand-muted mt-1">Generate sessions and take attendance to see stats here</p>
           </CardContent>
         </Card>
       )}
@@ -228,11 +369,39 @@ export default function AdminAttendancePage() {
         <Card>
           <CardContent className="py-4 px-0">
             <div className="overflow-x-auto">
-              <table className="text-sm border-collapse" style={{ minWidth: `${200 + sessions.length * 52}px` }}>
+              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + sessions.length * CELL_W}px` }}>
                 <thead>
+                  {/* Month row */}
+                  <tr>
+                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-20 bg-white" />
+                    <th style={{ minWidth: PCT_W }} className="sticky left-[200px] z-20 bg-white" />
+                    {sessionsByMonth.map((mg) => (
+                      <th
+                        key={mg.month}
+                        colSpan={mg.sessions.length}
+                        className="text-center font-bold text-brand-navy text-xs pb-1 border-b-2 border-brand-navy/20"
+                      >
+                        {mg.month}
+                      </th>
+                    ))}
+                  </tr>
+                  {/* Day type row (Sat/Wed/Mon) */}
+                  <tr>
+                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-20 bg-white" />
+                    <th style={{ minWidth: PCT_W }} className="sticky left-[200px] z-20 bg-white" />
+                    {sessions.map((s) => (
+                      <th key={s.id + '-day'} style={{ width: CELL_W }} className="text-center pb-0.5">
+                        <span className={cn('text-[9px] font-bold', getDayColor(s.date))}>
+                          {getDayAbbr(s.date)}
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                  {/* Date number row */}
                   <tr className="border-b-2 border-gray-200">
                     <th
-                      className="sticky left-0 z-10 bg-white pb-3 pl-6 pr-4 text-left font-semibold text-brand-dark-text text-sm cursor-pointer hover:text-brand-navy select-none min-w-[180px]"
+                      style={{ minWidth: NAME_W }}
+                      className="sticky left-0 z-20 bg-white pb-2 pl-4 pr-2 text-left font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
                       onClick={() => toggleSort('name')}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -241,7 +410,8 @@ export default function AdminAttendancePage() {
                       </span>
                     </th>
                     <th
-                      className="sticky left-[180px] z-10 bg-white pb-3 px-3 text-center font-semibold text-brand-dark-text text-sm cursor-pointer hover:text-brand-navy select-none min-w-[52px]"
+                      style={{ minWidth: PCT_W }}
+                      className="sticky left-[200px] z-20 bg-white pb-2 px-1 text-center font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
                       onClick={() => toggleSort('percentage')}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -250,8 +420,8 @@ export default function AdminAttendancePage() {
                       </span>
                     </th>
                     {sessions.map((s) => (
-                      <th key={s.id} className="pb-3 px-1 text-center font-medium text-brand-muted text-xs min-w-[48px] whitespace-nowrap">
-                        {formatShortDate(s.date)}
+                      <th key={s.id} style={{ width: CELL_W }} className="pb-2 text-center font-medium text-brand-muted text-[10px]">
+                        {getDayNum(s.date)}
                       </th>
                     ))}
                   </tr>
@@ -261,28 +431,37 @@ export default function AdminAttendancePage() {
                     <tr
                       key={p.id}
                       className={cn(
-                        'border-b border-gray-100 hover:bg-gray-50/50 transition-colors',
+                        'border-b border-gray-50 hover:bg-gray-50/50 transition-colors',
                         p.consecutiveAbsences >= 2 && 'bg-red-50/40'
                       )}
                     >
-                      <td className="sticky left-0 z-10 bg-inherit py-2.5 pl-6 pr-4 whitespace-nowrap min-w-[180px]">
-                        <span className="font-medium text-sm text-brand-dark-text">
-                          {p.firstName} {p.lastName}
+                      <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-inherit py-1 pl-4 pr-2 whitespace-nowrap">
+                        <span className="font-medium text-xs text-brand-dark-text">
+                          {p.lastName}, {p.firstName}
                         </span>
                         {p.consecutiveAbsences >= 2 && (
-                          <Badge className="ml-2 bg-red-100 text-red-700 text-[10px]">
-                            {p.consecutiveAbsences}x absent
+                          <Badge className="ml-1.5 bg-red-100 text-red-700 text-[8px] px-1 py-0">
+                            {p.consecutiveAbsences}x
                           </Badge>
                         )}
                       </td>
-                      <td className="sticky left-[180px] z-10 bg-inherit py-2.5 px-3 text-center min-w-[52px]">
-                        <span className={cn('font-bold text-sm', getPercentageColor(p.stats.percentage))}>
+                      <td style={{ minWidth: PCT_W }} className="sticky left-[200px] z-10 bg-inherit py-1 px-1 text-center">
+                        <span className={cn(
+                          'inline-block px-1.5 py-0.5 rounded text-[10px] font-bold',
+                          getPercentageColor(p.stats.percentage),
+                          getPercentageBg(p.stats.percentage)
+                        )}>
                           {p.stats.percentage}%
                         </span>
                       </td>
                       {sessions.map((s) => (
-                        <td key={s.id} className="py-2.5 px-1 text-center min-w-[48px]">
-                          {getStatusDot(p.records[s.id])}
+                        <td key={s.id} style={{ width: CELL_W }} className="py-1 text-center">
+                          <StatusCell
+                            status={p.records[s.id]}
+                            sessionId={s.id}
+                            participantId={p.id}
+                            onToggle={handleToggle}
+                          />
                         </td>
                       ))}
                     </tr>
@@ -292,21 +471,18 @@ export default function AdminAttendancePage() {
             </div>
 
             {/* Legend */}
-            <div className="mt-4 pt-3 mx-6 border-t border-gray-100 flex items-center gap-5 text-sm text-brand-muted">
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 rounded-full bg-emerald-500" /> Present
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 rounded-full bg-amber-400" /> Late
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 rounded-full bg-red-400" /> Absent
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 rounded-full bg-gray-300" /> Excused
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-3.5 w-3.5 rounded-full bg-gray-100 border border-gray-200" /> No data
+            <div className="mt-4 pt-3 mx-4 border-t border-gray-100 flex items-center gap-4 text-xs text-brand-muted flex-wrap">
+              {Object.entries(STATUS_COLORS).map(([key, val]) => (
+                <span key={key} className="flex items-center gap-1">
+                  <span className={cn('w-4 h-4 rounded-md text-white text-[9px] font-bold flex items-center justify-center', val.bg)}>
+                    {val.label}
+                  </span>
+                  {key.charAt(0).toUpperCase() + key.slice(1)}
+                </span>
+              ))}
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-gray-100 border border-gray-200 border-dashed" />
+                No data
               </span>
             </div>
           </CardContent>
