@@ -86,9 +86,54 @@ export async function GET(request: NextRequest) {
         isFuture: s.session_date > today,
       }));
 
+    // Fetch events for this group
+    const { data: eventGroupLinks } = await supabase
+      .from('event_groups')
+      .select('event_id')
+      .eq('group_id', groupId);
+
+    const eventIds = (eventGroupLinks ?? []).map((eg) => eg.event_id);
+    let eventHeaders: { id: string; name: string; date: string; hours: number }[] = [];
+    let eventRecords: Record<string, Record<string, boolean>> = {}; // eventId → participantId → attended
+
+    if (eventIds.length > 0) {
+      const { data: events } = await supabase
+        .from('events')
+        .select('id, name, event_date, real_hours')
+        .in('id', eventIds)
+        .order('event_date', { ascending: true });
+
+      eventHeaders = (events ?? []).map((e) => ({
+        id: e.id,
+        name: e.name,
+        date: e.event_date,
+        hours: e.real_hours,
+      }));
+
+      // Fetch event attendance
+      const { data: eventAttendance } = await supabase
+        .from('event_attendance')
+        .select('event_id, participant_id, attended')
+        .in('event_id', eventIds);
+
+      for (const ea of eventAttendance ?? []) {
+        if (!eventRecords[ea.event_id]) eventRecords[ea.event_id] = {};
+        eventRecords[ea.event_id][ea.participant_id] = ea.attended;
+      }
+
+      // Add event attendance to participant stats
+      for (const ps of participantStats) {
+        ps.eventRecords = {};
+        for (const ev of eventHeaders) {
+          ps.eventRecords[ev.id] = eventRecords[ev.id]?.[ps.id] ?? false;
+        }
+      }
+    }
+
     return NextResponse.json({
       sessions: sessionHeaders,
       participants: participantStats,
+      events: eventHeaders,
     });
   } catch (err) {
     console.error('Attendance stats error:', err);

@@ -34,6 +34,7 @@ export interface ParticipantStats {
   };
   consecutiveAbsences: number;
   records: Record<string, AttendanceStatus | null>;
+  eventRecords?: Record<string, boolean>;
 }
 
 /**

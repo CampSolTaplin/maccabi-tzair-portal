@@ -32,9 +32,17 @@ interface SessionHeader {
   isFuture: boolean;
 }
 
+interface EventHeader {
+  id: string;
+  name: string;
+  date: string;
+  hours: number;
+}
+
 interface StatsResponse {
   sessions: SessionHeader[];
   participants: ParticipantStats[];
+  events?: EventHeader[];
 }
 
 interface GroupOption {
@@ -159,6 +167,7 @@ export default function AdminAttendancePage() {
 
   const sessions = statsData?.sessions ?? [];
   const participants = statsData?.participants ?? [];
+  const events = statsData?.events ?? [];
 
   // Toggle attendance mutation
   const toggleMutation = useMutation({
@@ -295,6 +304,7 @@ export default function AdminAttendancePage() {
   }
 
   const CELL_W = 32; // px per session column
+  const EVENT_W = 40; // px per event column
   const NAME_W = 220;
   const PCT_W = 56;
 
@@ -420,7 +430,7 @@ export default function AdminAttendancePage() {
         <Card>
           <CardContent className="py-4 px-0">
             <div className="overflow-auto max-h-[calc(100vh-280px)]">
-              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + sessions.length * CELL_W}px` }}>
+              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + sessions.length * CELL_W + events.length * EVENT_W}px` }}>
                 <thead className="sticky top-0 z-30 bg-white">
                   {/* Month row */}
                   <tr>
@@ -435,6 +445,14 @@ export default function AdminAttendancePage() {
                         {mg.month}
                       </th>
                     ))}
+                    {events.length > 0 && (
+                      <th
+                        colSpan={events.length}
+                        className="text-center font-bold text-purple-700 text-xs pb-1 border-b-2 border-purple-300 border-l-2"
+                      >
+                        Special Events
+                      </th>
+                    )}
                   </tr>
                   {/* Day type row (Sat/Wed/Mon) */}
                   <tr>
@@ -452,6 +470,13 @@ export default function AdminAttendancePage() {
                           s.isCancelled ? 'text-red-300' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : getDayColor(s.date)
                         )}>
                           {getDayAbbr(s.date)}
+                        </span>
+                      </th>
+                    ))}
+                    {events.map((ev) => (
+                      <th key={ev.id + '-day'} style={{ width: EVENT_W }} className="text-center pb-0.5 bg-purple-50/50 border-l border-purple-100">
+                        <span className="text-[8px] font-bold text-purple-500 leading-tight block" title={ev.name}>
+                          {ev.name.split(/[\s(]/)[0].substring(0, 6)}
                         </span>
                       </th>
                     ))}
@@ -505,6 +530,13 @@ export default function AdminAttendancePage() {
                             {s.isCancelled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
                           </button>
                         </div>
+                      </th>
+                    ))}
+                    {events.map((ev) => (
+                      <th key={ev.id} style={{ width: EVENT_W }} className="pb-2 text-center bg-purple-50/50 border-l border-purple-100">
+                        <span className="font-medium text-[9px] text-purple-500" title={`${ev.name} - ${ev.hours}h`}>
+                          {getDayNum(ev.date)}/{new Date(ev.date + 'T12:00:00').getMonth() + 1}
+                        </span>
                       </th>
                     ))}
                   </tr>
@@ -568,6 +600,17 @@ export default function AdminAttendancePage() {
                           )}
                         </td>
                       ))}
+                      {events.map((ev) => (
+                        <td key={ev.id} style={{ width: EVENT_W }} className="py-1 text-center bg-purple-50/20 border-l border-purple-100/50">
+                          {p.eventRecords?.[ev.id] ? (
+                            <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-purple-500 mx-auto" title={ev.name}>
+                              ✓
+                            </span>
+                          ) : (
+                            <span className="w-5 h-5 rounded-md bg-gray-100 border border-gray-200 border-dashed mx-auto block" />
+                          )}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                   {/* Dropout separator */}
@@ -616,6 +659,13 @@ export default function AdminAttendancePage() {
                             <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-gray-400 mx-auto">
                               {STATUS_COLORS[p.records[s.id]!]?.label || '?'}
                             </span>
+                          ) : null}
+                        </td>
+                      ))}
+                      {events.map((ev) => (
+                        <td key={ev.id} style={{ width: EVENT_W }} className="py-1 text-center bg-purple-50/10 border-l border-purple-100/50">
+                          {p.eventRecords?.[ev.id] ? (
+                            <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-gray-400 mx-auto">✓</span>
                           ) : null}
                         </td>
                       ))}
