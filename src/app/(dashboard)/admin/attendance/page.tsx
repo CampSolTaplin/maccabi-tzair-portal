@@ -229,6 +229,15 @@ export default function AdminAttendancePage() {
     return groups;
   }, [sessions]);
 
+  // Track which session IDs are the first in their month (for border)
+  const firstInMonth = useMemo(() => {
+    const set = new Set<string>();
+    for (const mg of sessionsByMonth) {
+      if (mg.sessions.length > 0) set.add(mg.sessions[0].id);
+    }
+    return set;
+  }, [sessionsByMonth]);
+
   // Summary stats
   const avgPercentage = participants.length > 0
     ? Math.round(participants.reduce((s, p) => s + p.stats.percentage, 0) / participants.length)
@@ -506,6 +515,7 @@ export default function AdminAttendancePage() {
                       {sessions.map((s) => (
                         <td key={s.id} style={{ width: CELL_W }} className={cn(
                           'py-1 text-center',
+                          firstInMonth.has(s.id) && 'border-l-2 border-brand-navy/15',
                           s.isCancelled && 'bg-red-50/30',
                           !s.isCancelled && !s.hasAttendance && 'bg-amber-50/30'
                         )}>

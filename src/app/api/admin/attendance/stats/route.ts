@@ -43,13 +43,19 @@ export async function GET(request: NextRequest) {
     let records: { session_id: string; participant_id: string; status: string }[] = [];
 
     if (sessionIds.length > 0) {
-      const { data: attendanceData, error: attendanceError } = await supabase
-        .from('attendance_records')
-        .select('session_id, participant_id, status')
-        .in('session_id', sessionIds);
+      // Fetch ALL attendance records (Supabase default limit is 1000)
+      // Paginate in chunks of session IDs to handle large datasets
+      for (let i = 0; i < sessionIds.length; i += 20) {
+        const chunk = sessionIds.slice(i, i + 20);
+        const { data: attendanceData, error: attendanceError } = await supabase
+          .from('attendance_records')
+          .select('session_id, participant_id, status')
+          .in('session_id', chunk)
+          .limit(10000);
 
-      if (attendanceError) throw new Error(attendanceError.message);
-      records = attendanceData ?? [];
+        if (attendanceError) throw new Error(attendanceError.message);
+        records.push(...(attendanceData ?? []));
+      }
     }
 
     // Compute stats
