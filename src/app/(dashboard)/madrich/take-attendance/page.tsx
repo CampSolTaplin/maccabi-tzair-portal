@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardCheck,
   Search,
@@ -17,8 +18,6 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { createClient } from '@/lib/supabase/client';
-import { useGroupMembership } from '@/lib/hooks/use-group-membership';
-import { useAvailableSessions, type AvailableSession } from '@/lib/hooks/use-available-sessions';
 
 type Status = 'present' | 'late' | 'absent' | 'excused';
 
@@ -28,6 +27,14 @@ interface MemberEntry {
   lastName: string;
   status: Status | null;
   saving: boolean;
+}
+
+interface AvailableSession {
+  id: string;
+  sessionDate: string;
+  isLocked: boolean;
+  isCancelled: boolean;
+  attendanceCount: number;
 }
 
 const statusConfig: {
@@ -62,8 +69,40 @@ function isToday(dateStr: string): boolean {
 }
 
 export default function TakeAttendancePage() {
-  const { groupId, groupName, loading: groupLoading, error: groupError } = useGroupMembership();
-  const { sessions, loading: sessionsLoading, refetch: refetchSessions } = useAvailableSessions(groupId);
+  // Fetch group info + members via API (bypasses RLS)
+  const { data: groupData, isLoading: groupLoading, error: groupError } = useQuery<{
+    groupId: string;
+    groupName: string;
+    members: { id: string; firstName: string; lastName: string }[];
+  }>({
+    queryKey: ['madrich-group-members'],
+    queryFn: async () => {
+      const res = await fetch('/api/madrich/group-members');
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to load group');
+      }
+      return res.json();
+    },
+  });
+
+  // Fetch available sessions via API
+  const { data: sessionsData, isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<{
+    sessions: AvailableSession[];
+  }>({
+    queryKey: ['madrich-sessions'],
+    queryFn: async () => {
+      const res = await fetch('/api/madrich/sessions');
+      if (!res.ok) throw new Error('Failed to load sessions');
+      return res.json();
+    },
+    enabled: !!groupData?.groupId,
+  });
+
+  const groupId = groupData?.groupId ?? null;
+  const groupName = groupData?.groupName ?? null;
+  const baseMemberList = groupData?.members ?? [];
+  const sessions = sessionsData?.sessions ?? [];
 
   const [selectedSession, setSelectedSession] = useState<AvailableSession | null>(null);
   const [members, setMembers] = useState<MemberEntry[]>([]);
@@ -82,25 +121,18 @@ export default function TakeAttendancePage() {
     }
   }, [sessions, selectedSession]);
 
-  // Load participants when session is selected
+  // Load attendance when session is selected
   useEffect(() => {
-    if (!groupId || !selectedSession) {
+    if (!selectedSession || baseMemberList.length === 0) {
       setMembers([]);
       return;
     }
 
     const currentSession = selectedSession;
 
-    async function loadData() {
+    async function loadAttendance() {
       setLoadingMembers(true);
       const supabase = createClient();
-
-      const { data: memberships } = await supabase
-        .from('group_memberships')
-        .select('profile_id, profiles(id, first_name, last_name)')
-        .eq('group_id', groupId)
-        .eq('role', 'participant')
-        .eq('is_active', true);
 
       const { data: existingAttendance } = await supabase
         .from('attendance_records')
@@ -111,28 +143,21 @@ export default function TakeAttendancePage() {
         (existingAttendance ?? []).map((a) => [a.participant_id, a.status as Status])
       );
 
-      const entries: MemberEntry[] = (memberships ?? [])
-        .map((m) => {
-          const profile = m.profiles as unknown as { id: string; first_name: string; last_name: string } | null;
-          if (!profile) return null;
-          return {
-            id: profile.id,
-            firstName: profile.first_name,
-            lastName: profile.last_name,
-            status: attendanceMap.get(profile.id) ?? null,
-            saving: false,
-          };
-        })
-        .filter((e): e is MemberEntry => e !== null)
-        .sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
+      const entries: MemberEntry[] = baseMemberList.map((m) => ({
+        id: m.id,
+        firstName: m.firstName,
+        lastName: m.lastName,
+        status: attendanceMap.get(m.id) ?? null,
+        saving: false,
+      }));
 
       setMembers(entries);
       setLocked(currentSession.isLocked);
       setLoadingMembers(false);
     }
 
-    loadData();
-  }, [groupId, selectedSession]);
+    loadAttendance();
+  }, [selectedSession, baseMemberList]);
 
   // Realtime subscription
   useEffect(() => {
@@ -257,7 +282,7 @@ export default function TakeAttendancePage() {
     );
   }
 
-  // No sessions at all
+  // No sessions
   if (sessions.length === 0) {
     return (
       <div className="mx-auto max-w-md py-24 text-center">
@@ -270,7 +295,7 @@ export default function TakeAttendancePage() {
     );
   }
 
-  // SESSION PICKER — no session selected yet
+  // SESSION PICKER
   if (!selectedSession) {
     const unlocked = sessions.filter((s) => !s.isLocked);
     const lockedSessions = sessions.filter((s) => s.isLocked);
@@ -371,10 +396,9 @@ export default function TakeAttendancePage() {
     );
   }
 
-  // ATTENDANCE VIEW — session selected
+  // ATTENDANCE VIEW
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      {/* Back button */}
       <button
         onClick={() => { setSelectedSession(null); setMembers([]); setSearch(''); }}
         className="flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark-text transition-colors cursor-pointer"
@@ -383,7 +407,6 @@ export default function TakeAttendancePage() {
         Back to sessions
       </button>
 
-      {/* Header */}
       <div className={cn(
         'rounded-2xl p-6 text-white shadow-md',
         locked
@@ -410,7 +433,6 @@ export default function TakeAttendancePage() {
         </div>
       </div>
 
-      {/* Locked banner */}
       {locked && (
         <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700 flex items-center gap-2">
           <Lock className="h-4 w-4" />
@@ -418,7 +440,6 @@ export default function TakeAttendancePage() {
         </div>
       )}
 
-      {/* Search */}
       {!loadingMembers && members.length > 0 && (
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-brand-muted" />
@@ -432,14 +453,12 @@ export default function TakeAttendancePage() {
         </div>
       )}
 
-      {/* Loading members */}
       {loadingMembers && (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="h-6 w-6 animate-spin text-brand-navy" />
         </div>
       )}
 
-      {/* Member List */}
       <div className="space-y-3">
         {filteredMembers.map((member) => (
           <div key={member.id} className="rounded-xl bg-white p-4 shadow-sm">
@@ -478,7 +497,6 @@ export default function TakeAttendancePage() {
         ))}
       </div>
 
-      {/* Submit */}
       {!locked && members.length > 0 && (
         <button
           onClick={handleLockAndSubmit}
