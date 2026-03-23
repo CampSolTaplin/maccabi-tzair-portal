@@ -11,11 +11,14 @@ import {
   Loader2,
   Lock,
   CalendarOff,
+  ChevronLeft,
+  Calendar,
+  Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { createClient } from '@/lib/supabase/client';
 import { useGroupMembership } from '@/lib/hooks/use-group-membership';
-import { useTodaySession } from '@/lib/hooks/use-today-session';
+import { useAvailableSessions, type AvailableSession } from '@/lib/hooks/use-available-sessions';
 
 type Status = 'present' | 'late' | 'absent' | 'excused';
 
@@ -40,27 +43,58 @@ const statusConfig: {
   { value: 'excused', icon: AlertCircle, label: 'Excused', color: 'text-gray-500', bg: 'bg-gray-50 border-gray-200' },
 ];
 
+function formatSessionDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function formatShortDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function isToday(dateStr: string): boolean {
+  const today = new Date();
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+}
+
 export default function TakeAttendancePage() {
   const { groupId, groupName, loading: groupLoading, error: groupError } = useGroupMembership();
-  const { sessionId, isLocked, noSession, loading: sessionLoading, refetch: refetchSession } = useTodaySession(groupId);
+  const { sessions, loading: sessionsLoading, refetch: refetchSessions } = useAvailableSessions(groupId);
 
+  const [selectedSession, setSelectedSession] = useState<AvailableSession | null>(null);
   const [members, setMembers] = useState<MemberEntry[]>([]);
   const [search, setSearch] = useState('');
-  const [loadingMembers, setLoadingMembers] = useState(true);
+  const [loadingMembers, setLoadingMembers] = useState(false);
   const [locking, setLocking] = useState(false);
   const [locked, setLocked] = useState(false);
 
-  // Load participants and existing attendance
+  // Auto-select today's session if available
   useEffect(() => {
-    if (!groupId || !sessionId) {
-      setLoadingMembers(false);
+    if (sessions.length > 0 && !selectedSession) {
+      const todaySession = sessions.find((s) => isToday(s.sessionDate) && !s.isLocked);
+      if (todaySession) {
+        setSelectedSession(todaySession);
+      }
+    }
+  }, [sessions, selectedSession]);
+
+  // Load participants when session is selected
+  useEffect(() => {
+    if (!groupId || !selectedSession) {
+      setMembers([]);
       return;
     }
 
+    const currentSession = selectedSession;
+
     async function loadData() {
+      setLoadingMembers(true);
       const supabase = createClient();
 
-      // Get participants in the group
       const { data: memberships } = await supabase
         .from('group_memberships')
         .select('profile_id, profiles(id, first_name, last_name)')
@@ -68,11 +102,10 @@ export default function TakeAttendancePage() {
         .eq('role', 'participant')
         .eq('is_active', true);
 
-      // Get existing attendance for this session
       const { data: existingAttendance } = await supabase
         .from('attendance_records')
         .select('participant_id, status')
-        .eq('session_id', sessionId);
+        .eq('session_id', currentSession.id);
 
       const attendanceMap = new Map(
         (existingAttendance ?? []).map((a) => [a.participant_id, a.status as Status])
@@ -94,31 +127,27 @@ export default function TakeAttendancePage() {
         .sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
 
       setMembers(entries);
+      setLocked(currentSession.isLocked);
       setLoadingMembers(false);
     }
 
     loadData();
-  }, [groupId, sessionId]);
+  }, [groupId, selectedSession]);
 
-  // Set locked state from session
+  // Realtime subscription
   useEffect(() => {
-    setLocked(isLocked);
-  }, [isLocked]);
-
-  // Realtime subscription for live sync
-  useEffect(() => {
-    if (!sessionId) return;
+    if (!selectedSession) return;
 
     const supabase = createClient();
     const channel = supabase
-      .channel(`attendance-${sessionId}`)
+      .channel(`attendance-${selectedSession.id}`)
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
           table: 'attendance_records',
-          filter: `session_id=eq.${sessionId}`,
+          filter: `session_id=eq.${selectedSession.id}`,
         },
         (payload) => {
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
@@ -138,13 +167,12 @@ export default function TakeAttendancePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [sessionId]);
+  }, [selectedSession]);
 
   const setStatus = useCallback(
     async (participantId: string, status: Status) => {
-      if (!sessionId || locked) return;
+      if (!selectedSession || locked) return;
 
-      // Optimistic update
       setMembers((prev) =>
         prev.map((m) =>
           m.id === participantId
@@ -159,19 +187,17 @@ export default function TakeAttendancePage() {
       const { data: { user } } = await supabase.auth.getUser();
 
       if (newStatus === null) {
-        // Remove attendance record
         await supabase
           .from('attendance_records')
           .delete()
-          .eq('session_id', sessionId)
+          .eq('session_id', selectedSession.id)
           .eq('participant_id', participantId);
       } else {
-        // Upsert attendance record
         await supabase
           .from('attendance_records')
           .upsert(
             {
-              session_id: sessionId,
+              session_id: selectedSession.id,
               participant_id: participantId,
               status: newStatus,
               marked_by: user?.id,
@@ -180,22 +206,21 @@ export default function TakeAttendancePage() {
           );
       }
 
-      // Mark as not saving (realtime will also update but this is faster for local)
       setMembers((prev) =>
         prev.map((m) => (m.id === participantId ? { ...m, saving: false } : m))
       );
     },
-    [sessionId, locked, members]
+    [selectedSession, locked, members]
   );
 
   async function handleLockAndSubmit() {
-    if (!sessionId) return;
+    if (!selectedSession) return;
     setLocking(true);
     try {
       const supabase = createClient();
-      await supabase.from('sessions').update({ is_locked: true }).eq('id', sessionId);
+      await supabase.from('sessions').update({ is_locked: true }).eq('id', selectedSession.id);
       setLocked(true);
-      refetchSession();
+      refetchSessions();
     } catch {
       // ignore
     } finally {
@@ -203,21 +228,14 @@ export default function TakeAttendancePage() {
     }
   }
 
-  const today = new Date().toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-
   const filteredMembers = members.filter(
     (m) => `${m.firstName} ${m.lastName}`.toLowerCase().includes(search.toLowerCase())
   );
   const markedCount = members.filter((m) => m.status !== null).length;
   const allMarked = markedCount === members.length && members.length > 0;
 
-  // Loading states
-  if (groupLoading || sessionLoading) {
+  // Loading
+  if (groupLoading || sessionsLoading) {
     return (
       <div className="flex flex-col items-center justify-center py-24">
         <Loader2 className="h-10 w-10 animate-spin text-brand-navy" />
@@ -226,7 +244,7 @@ export default function TakeAttendancePage() {
     );
   }
 
-  // Error: no group assigned
+  // No group
   if (groupError || !groupId) {
     return (
       <div className="mx-auto max-w-md py-24 text-center">
@@ -239,21 +257,132 @@ export default function TakeAttendancePage() {
     );
   }
 
-  // No session today
-  if (noSession || !sessionId) {
+  // No sessions at all
+  if (sessions.length === 0) {
     return (
       <div className="mx-auto max-w-md py-24 text-center">
         <CalendarOff className="h-12 w-12 text-brand-muted/40 mx-auto" />
-        <h2 className="mt-4 text-lg font-semibold text-brand-dark-text">No Session Today</h2>
+        <h2 className="mt-4 text-lg font-semibold text-brand-dark-text">No Sessions Available</h2>
         <p className="mt-2 text-sm text-brand-muted">
-          There is no {groupName} session scheduled for today ({today}).
+          There are no sessions available for {groupName}. Contact an administrator.
         </p>
       </div>
     );
   }
 
+  // SESSION PICKER — no session selected yet
+  if (!selectedSession) {
+    const unlocked = sessions.filter((s) => !s.isLocked);
+    const lockedSessions = sessions.filter((s) => s.isLocked);
+
+    return (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <div className="rounded-2xl bg-gradient-to-br from-brand-navy to-brand-navy/80 p-6 text-white shadow-md">
+          <div className="flex items-center gap-3 mb-1">
+            <Calendar className="h-7 w-7" />
+            <h1 className="text-2xl font-bold">Take Attendance</h1>
+          </div>
+          <p className="text-white/70">{groupName}</p>
+        </div>
+
+        {unlocked.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-2">
+              Open Sessions
+            </h3>
+            <div className="space-y-2">
+              {unlocked.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setSelectedSession(s)}
+                  className={cn(
+                    'w-full flex items-center justify-between rounded-xl bg-white border p-4 shadow-sm transition-all hover:shadow-md hover:border-brand-navy/30 cursor-pointer text-left',
+                    isToday(s.sessionDate) && 'border-brand-coral ring-2 ring-brand-coral/20'
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      'w-12 h-12 rounded-lg flex flex-col items-center justify-center',
+                      isToday(s.sessionDate) ? 'bg-brand-coral/10 text-brand-coral' : 'bg-brand-navy/5 text-brand-navy'
+                    )}>
+                      <span className="text-[10px] font-medium uppercase">
+                        {new Date(s.sessionDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short' })}
+                      </span>
+                      <span className="text-lg font-bold leading-none">
+                        {new Date(s.sessionDate + 'T12:00:00').getDate()}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="font-medium text-brand-dark-text">
+                        {formatShortDate(s.sessionDate)}
+                        {isToday(s.sessionDate) && (
+                          <span className="ml-2 text-xs font-semibold text-brand-coral">TODAY</span>
+                        )}
+                      </p>
+                      {s.attendanceCount > 0 && (
+                        <p className="text-xs text-brand-muted flex items-center gap-1 mt-0.5">
+                          <Users className="h-3 w-3" />{s.attendanceCount} marked
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronLeft className="h-5 w-5 text-brand-muted rotate-180" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {lockedSessions.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-2">
+              Submitted Sessions
+            </h3>
+            <div className="space-y-2">
+              {lockedSessions.slice(0, 5).map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setSelectedSession(s)}
+                  className="w-full flex items-center justify-between rounded-xl bg-gray-50 border border-gray-200 p-4 transition-all hover:bg-gray-100 cursor-pointer text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-lg bg-gray-100 flex flex-col items-center justify-center text-gray-500">
+                      <span className="text-[10px] font-medium uppercase">
+                        {new Date(s.sessionDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short' })}
+                      </span>
+                      <span className="text-lg font-bold leading-none">
+                        {new Date(s.sessionDate + 'T12:00:00').getDate()}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-600">{formatShortDate(s.sessionDate)}</p>
+                      <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+                        <Lock className="h-3 w-3" />Locked &middot; {s.attendanceCount} marked
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronLeft className="h-5 w-5 text-gray-400 rotate-180" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ATTENDANCE VIEW — session selected
   return (
     <div className="mx-auto max-w-2xl space-y-6">
+      {/* Back button */}
+      <button
+        onClick={() => { setSelectedSession(null); setMembers([]); setSearch(''); }}
+        className="flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark-text transition-colors cursor-pointer"
+      >
+        <ChevronLeft className="h-4 w-4" />
+        Back to sessions
+      </button>
+
       {/* Header */}
       <div className={cn(
         'rounded-2xl p-6 text-white shadow-md',
@@ -267,7 +396,7 @@ export default function TakeAttendancePage() {
             {locked ? 'Attendance Submitted' : 'Take Attendance'}
           </h1>
         </div>
-        <p className="text-white/80">{groupName} &middot; {today}</p>
+        <p className="text-white/80">{groupName} &middot; {formatSessionDate(selectedSession.sessionDate)}</p>
         <div className="mt-4 flex items-center gap-2">
           <div className="h-2 flex-1 rounded-full bg-white/20">
             <div
