@@ -263,7 +263,7 @@ export default function AdminAttendancePage() {
   }
 
   const CELL_W = 32; // px per session column
-  const NAME_W = 200;
+  const NAME_W = 220;
   const PCT_W = 56;
 
   return (
@@ -387,13 +387,13 @@ export default function AdminAttendancePage() {
       {!isLoading && !error && sessions.length > 0 && (
         <Card>
           <CardContent className="py-4 px-0">
-            <div className="overflow-x-auto">
+            <div className="overflow-auto max-h-[calc(100vh-280px)]">
               <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + sessions.length * CELL_W}px` }}>
-                <thead>
+                <thead className="sticky top-0 z-30 bg-white">
                   {/* Month row */}
                   <tr>
-                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-20 bg-white" />
-                    <th style={{ minWidth: PCT_W }} className="sticky left-[200px] z-20 bg-white" />
+                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
+                    <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
                     {sessionsByMonth.map((mg) => (
                       <th
                         key={mg.month}
@@ -406,8 +406,8 @@ export default function AdminAttendancePage() {
                   </tr>
                   {/* Day type row (Sat/Wed/Mon) */}
                   <tr>
-                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-20 bg-white" />
-                    <th style={{ minWidth: PCT_W }} className="sticky left-[200px] z-20 bg-white" />
+                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
+                    <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
                     {sessions.map((s) => (
                       <th key={s.id + '-day'} style={{ width: CELL_W }} className={cn(
                         'text-center pb-0.5',
@@ -427,7 +427,7 @@ export default function AdminAttendancePage() {
                   <tr className="border-b-2 border-gray-200">
                     <th
                       style={{ minWidth: NAME_W }}
-                      className="sticky left-0 z-20 bg-white pb-2 pl-4 pr-2 text-left font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
+                      className="sticky left-0 z-40 bg-white pb-2 pl-4 pr-2 text-left font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
                       onClick={() => toggleSort('name')}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -437,7 +437,7 @@ export default function AdminAttendancePage() {
                     </th>
                     <th
                       style={{ minWidth: PCT_W }}
-                      className="sticky left-[200px] z-20 bg-white pb-2 px-1 text-center font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
+                      className="sticky left-[220px] z-40 bg-white pb-2 px-1 text-center font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
                       onClick={() => toggleSort('percentage')}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -494,7 +494,7 @@ export default function AdminAttendancePage() {
                           </Badge>
                         )}
                       </td>
-                      <td style={{ minWidth: PCT_W }} className="sticky left-[200px] z-10 bg-inherit py-1 px-1 text-center">
+                      <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-inherit py-1 px-1 text-center">
                         <span className={cn(
                           'inline-block px-1.5 py-0.5 rounded text-[10px] font-bold',
                           getPercentageColor(p.stats.percentage),
