@@ -25,6 +25,14 @@ export async function middleware(request: NextRequest) {
   // Allow public routes
   if (PUBLIC_ROUTES.some(r => path.startsWith(r))) {
     if (user) {
+      // Don't redirect away from /mfa-verify if MFA is still needed
+      if (path.startsWith('/mfa-verify')) {
+        const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+        if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
+          return supabaseResponse; // Stay on MFA page
+        }
+      }
+
       const { data: profile } = await supabase
         .from('profiles')
         .select('role')
