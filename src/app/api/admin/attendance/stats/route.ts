@@ -24,19 +24,22 @@ export async function GET(request: NextRequest) {
 
     if (sessionsError) throw new Error(sessionsError.message);
 
-    // Fetch participants in this group
+    // Fetch participants in this group (both active and inactive/dropout)
     const { data: memberships, error: membersError } = await supabase
       .from('group_memberships')
-      .select('profile_id, profiles(id, first_name, last_name)')
+      .select('profile_id, is_active, profiles(id, first_name, last_name, is_active)')
       .eq('group_id', groupId)
-      .eq('role', 'participant')
-      .eq('is_active', true);
+      .eq('role', 'participant');
 
     if (membersError) throw new Error(membersError.message);
 
     const participants = (memberships ?? [])
-      .map((m) => m.profiles as unknown as { id: string; first_name: string; last_name: string } | null)
-      .filter((p): p is { id: string; first_name: string; last_name: string } => p !== null);
+      .map((m) => {
+        const p = m.profiles as unknown as { id: string; first_name: string; last_name: string; is_active: boolean } | null;
+        if (!p) return null;
+        return { ...p, isDropout: !m.is_active };
+      })
+      .filter((p): p is { id: string; first_name: string; last_name: string; is_active: boolean; isDropout: boolean } => p !== null);
 
     // Fetch all attendance records for these sessions
     const sessionIds = (sessions ?? []).map((s) => s.id);

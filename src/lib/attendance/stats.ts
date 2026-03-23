@@ -17,12 +17,14 @@ interface ParticipantProfile {
   id: string;
   first_name: string;
   last_name: string;
+  isDropout?: boolean;
 }
 
 export interface ParticipantStats {
   id: string;
   firstName: string;
   lastName: string;
+  isDropout: boolean;
   stats: {
     present: number;
     late: number;
@@ -124,6 +126,7 @@ export function computeAttendanceStats(
       id: p.id,
       firstName: p.first_name,
       lastName: p.last_name,
+      isDropout: p.isDropout ?? false,
       stats: { present, late, excused, total, percentage },
       consecutiveAbsences,
       records: allRecords,

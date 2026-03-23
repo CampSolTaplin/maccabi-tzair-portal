@@ -197,22 +197,27 @@ export default function AdminAttendancePage() {
     [toggleMutation]
   );
 
-  // Sort participants
-  const sortedParticipants = useMemo(() => {
-    const sorted = [...participants];
-    if (sortBy === 'name') {
-      sorted.sort((a, b) => {
+  // Split active and dropout, sort each
+  const { activeParticipants, dropoutParticipants } = useMemo(() => {
+    const active = participants.filter((p) => !p.isDropout);
+    const dropout = participants.filter((p) => p.isDropout);
+
+    const sortFn = (a: ParticipantStats, b: ParticipantStats) => {
+      if (sortBy === 'name') {
         const cmp = a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName);
         return sortAsc ? cmp : -cmp;
-      });
-    } else {
-      sorted.sort((a, b) => {
+      } else {
         const cmp = a.stats.percentage - b.stats.percentage;
         return sortAsc ? cmp : -cmp;
-      });
-    }
-    return sorted;
+      }
+    };
+
+    active.sort(sortFn);
+    dropout.sort(sortFn);
+    return { activeParticipants: active, dropoutParticipants: dropout };
   }, [participants, sortBy, sortAsc]);
+
+  const sortedParticipants = activeParticipants;
 
   // Group sessions by month for header
   const sessionsByMonth = useMemo(() => {
@@ -333,8 +338,8 @@ export default function AdminAttendancePage() {
             <CardContent className="flex items-center gap-3 py-4">
               <Users className="h-5 w-5 text-brand-navy" />
               <div>
-                <p className="text-2xl font-bold text-brand-dark-text">{participants.length}</p>
-                <p className="text-xs text-brand-muted">Participants</p>
+                <p className="text-2xl font-bold text-brand-dark-text">{activeParticipants.length}</p>
+                <p className="text-xs text-brand-muted">Active{dropoutParticipants.length > 0 ? ` (+${dropoutParticipants.length} dropout)` : ''}</p>
               </div>
             </CardContent>
           </Card>
@@ -535,6 +540,48 @@ export default function AdminAttendancePage() {
                             onToggle={handleToggle}
                           />
                           )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {/* Dropout separator */}
+                  {dropoutParticipants.length > 0 && (
+                    <tr>
+                      <td colSpan={2 + sessions.length} className="sticky left-0 z-10 bg-gray-100 py-2 pl-4">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                          Dropouts ({dropoutParticipants.length})
+                        </span>
+                      </td>
+                    </tr>
+                  )}
+                  {dropoutParticipants.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="border-b border-gray-50 opacity-50"
+                    >
+                      <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-white py-1 pl-4 pr-2 whitespace-nowrap">
+                        <span className="font-medium text-xs text-gray-400">
+                          {p.lastName}, {p.firstName}
+                        </span>
+                        <Badge className="ml-1.5 bg-gray-100 text-gray-500 text-[8px] px-1 py-0">
+                          dropout
+                        </Badge>
+                      </td>
+                      <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-white py-1 px-1 text-center border-r-2 border-gray-200">
+                        <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold text-gray-400 bg-gray-50">
+                          {p.stats.percentage}%
+                        </span>
+                      </td>
+                      {sessions.map((s) => (
+                        <td key={s.id} style={{ width: CELL_W }} className={cn(
+                          'py-1 text-center',
+                          firstInMonth.has(s.id) && 'border-l-2 border-brand-navy/15',
+                        )}>
+                          {p.records[s.id] ? (
+                            <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-gray-400 mx-auto">
+                              {STATUS_COLORS[p.records[s.id]!]?.label || '?'}
+                            </span>
+                          ) : null}
                         </td>
                       ))}
                     </tr>
