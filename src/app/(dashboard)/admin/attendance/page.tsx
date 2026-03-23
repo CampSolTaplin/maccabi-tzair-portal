@@ -319,7 +319,7 @@ export default function AdminAttendancePage() {
   }
 
   const CELL_W = 32; // px per session column
-  const EVENT_W = 48; // px per event column
+  const EVENT_W = 32; // px per event column (same as sessions, name shown on hover)
   const NAME_W = 220;
   const PCT_W = 56;
 
@@ -484,10 +484,8 @@ export default function AdminAttendancePage() {
                         </span>
                       </th>
                     ) : (
-                      <th key={getColId(col) + '-day'} style={{ width: EVENT_W }} className="text-center pb-0.5 bg-purple-50/60 border-l border-r border-purple-200">
-                        <span className="text-[7px] font-bold text-purple-600 leading-tight block px-0.5 truncate" title={(col.data as EventHeader).name}>
-                          {(col.data as EventHeader).name}
-                        </span>
+                      <th key={getColId(col) + '-day'} style={{ width: EVENT_W }} className="text-center pb-0.5 bg-purple-50/60 border-l border-r border-purple-200" title={(col.data as EventHeader).name}>
+                        <span className="text-[9px] font-bold text-purple-500">★</span>
                       </th>
                     ))}
                   </tr>
@@ -542,8 +540,8 @@ export default function AdminAttendancePage() {
                         </div>
                       </th>
                     ) : (
-                      <th key={getColId(col)} style={{ width: EVENT_W }} className="pb-2 text-center bg-purple-50/60 border-l border-r border-purple-200">
-                        <span className="font-medium text-[9px] text-purple-600" title={(col.data as EventHeader).name + ' - ' + (col.data as EventHeader).hours + 'h'}>
+                      <th key={getColId(col)} style={{ width: EVENT_W }} className="pb-2 text-center bg-purple-50/60 border-l border-r border-purple-200" title={(col.data as EventHeader).name + ' (' + (col.data as EventHeader).hours + 'h)'}>
+                        <span className="font-medium text-[9px] text-purple-600">
                           {getDayNum(col.data.date)}
                         </span>
                       </th>

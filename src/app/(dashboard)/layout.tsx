@@ -51,7 +51,6 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
     { label: 'Community Hours', href: '/admin/hours', icon: Clock },
     { label: 'Settings', href: '/admin/settings', icon: Settings, disabled: true },
     { label: 'Security', href: '/admin/security', icon: Shield },
-    { label: 'Salesforce', href: '/admin/salesforce', icon: Cloud },
     { label: 'Import', href: '/admin/roster-import', icon: FileUp },
   ],
   madrich: [
