@@ -39,6 +39,11 @@ interface EventHeader {
   hours: number;
 }
 
+// Unified column type for chronological grid
+type GridColumn =
+  | { type: 'session'; data: SessionHeader }
+  | { type: 'event'; data: EventHeader };
+
 interface StatsResponse {
   sessions: SessionHeader[];
   participants: ParticipantStats[];
@@ -169,6 +174,15 @@ export default function AdminAttendancePage() {
   const participants = statsData?.participants ?? [];
   const events = statsData?.events ?? [];
 
+  // Merge sessions and events into chronological order
+  const gridColumns = useMemo(() => {
+    const cols: GridColumn[] = [];
+    for (const s of sessions) cols.push({ type: 'session', data: s });
+    for (const e of events) cols.push({ type: 'event', data: e });
+    cols.sort((a, b) => a.data.date.localeCompare(b.data.date));
+    return cols;
+  }, [sessions, events]);
+
   // Toggle attendance mutation
   const toggleMutation = useMutation({
     mutationFn: async ({ sessionId, participantId, currentStatus }: { sessionId: string; participantId: string; currentStatus: string | null }) => {
@@ -245,30 +259,31 @@ export default function AdminAttendancePage() {
 
   const sortedParticipants = activeParticipants;
 
-  // Group sessions by month for header
-  const sessionsByMonth = useMemo(() => {
-    const groups: { month: string; sessions: SessionHeader[] }[] = [];
+  // Group columns by month for header
+  const columnsByMonth = useMemo(() => {
+    const groups: { month: string; columns: GridColumn[] }[] = [];
     let currentMonth = '';
-    for (const s of sessions) {
-      const month = getMonthLabel(s.date);
+    for (const col of gridColumns) {
+      const month = getMonthLabel(col.data.date);
       if (month !== currentMonth) {
-        groups.push({ month, sessions: [s] });
+        groups.push({ month, columns: [col] });
         currentMonth = month;
       } else {
-        groups[groups.length - 1].sessions.push(s);
+        groups[groups.length - 1].columns.push(col);
       }
     }
     return groups;
-  }, [sessions]);
+  }, [gridColumns]);
 
-  // Track which session IDs are the first in their month (for border)
+  // Track which columns are first in their month (for border)
   const firstInMonth = useMemo(() => {
-    const set = new Set<string>();
-    for (const mg of sessionsByMonth) {
-      if (mg.sessions.length > 0) set.add(mg.sessions[0].id);
+    const set = new Set<number>();
+    for (const mg of columnsByMonth) {
+      const idx = gridColumns.indexOf(mg.columns[0]);
+      if (idx >= 0) set.add(idx);
     }
     return set;
-  }, [sessionsByMonth]);
+  }, [columnsByMonth, gridColumns]);
 
   // Summary stats
   const avgPercentage = participants.length > 0
@@ -304,9 +319,13 @@ export default function AdminAttendancePage() {
   }
 
   const CELL_W = 32; // px per session column
-  const EVENT_W = 40; // px per event column
+  const EVENT_W = 48; // px per event column
   const NAME_W = 220;
   const PCT_W = 56;
+
+  function getColWidth(col: GridColumn) { return col.type === 'event' ? EVENT_W : CELL_W; }
+  function getColId(col: GridColumn) { return col.type === 'event' ? 'ev-' + col.data.id : col.data.id; }
+  const totalGridWidth = gridColumns.reduce((w, col) => w + getColWidth(col), 0);
 
   return (
     <div className="space-y-6">
@@ -430,53 +449,44 @@ export default function AdminAttendancePage() {
         <Card>
           <CardContent className="py-4 px-0">
             <div className="overflow-auto max-h-[calc(100vh-280px)]">
-              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + sessions.length * CELL_W + events.length * EVENT_W}px` }}>
+              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + totalGridWidth}px` }}>
                 <thead className="sticky top-0 z-30 bg-white">
                   {/* Month row */}
                   <tr>
                     <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
                     <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
-                    {sessionsByMonth.map((mg) => (
+                    {columnsByMonth.map((mg) => (
                       <th
                         key={mg.month}
-                        colSpan={mg.sessions.length}
+                        colSpan={mg.columns.length}
                         className="text-center font-bold text-brand-navy text-xs pb-1 border-b-2 border-brand-navy/20"
                       >
                         {mg.month}
                       </th>
                     ))}
-                    {events.length > 0 && (
-                      <th
-                        colSpan={events.length}
-                        className="text-center font-bold text-purple-700 text-xs pb-1 border-b-2 border-purple-300 border-l-2"
-                      >
-                        Special Events
-                      </th>
-                    )}
                   </tr>
-                  {/* Day type row (Sat/Wed/Mon) */}
+                  {/* Day type / event name row */}
                   <tr>
                     <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
                     <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
-                    {sessions.map((s) => (
-                      <th key={s.id + '-day'} style={{ width: CELL_W }} className={cn(
+                    {gridColumns.map((col) => col.type === 'session' ? (
+                      <th key={getColId(col) + '-day'} style={{ width: CELL_W }} className={cn(
                         'text-center pb-0.5',
-                        s.isCancelled && 'bg-red-50/50',
-                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
-                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
+                        col.data.isCancelled && 'bg-red-50/50',
+                        col.data.isFuture && !col.data.isCancelled && 'bg-blue-50/50',
+                        !col.data.isCancelled && !col.data.isFuture && !col.data.hasAttendance && 'bg-amber-50/50'
                       )}>
                         <span className={cn(
                           'text-[9px] font-bold',
-                          s.isCancelled ? 'text-red-300' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : getDayColor(s.date)
+                          col.data.isCancelled ? 'text-red-300' : col.data.isFuture ? 'text-blue-400' : !col.data.hasAttendance ? 'text-amber-400' : getDayColor(col.data.date)
                         )}>
-                          {getDayAbbr(s.date)}
+                          {getDayAbbr(col.data.date)}
                         </span>
                       </th>
-                    ))}
-                    {events.map((ev) => (
-                      <th key={ev.id + '-day'} style={{ width: EVENT_W }} className="text-center pb-0.5 bg-purple-50/50 border-l border-purple-100">
-                        <span className="text-[8px] font-bold text-purple-500 leading-tight block" title={ev.name}>
-                          {ev.name.split(/[\s(]/)[0].substring(0, 6)}
+                    ) : (
+                      <th key={getColId(col) + '-day'} style={{ width: EVENT_W }} className="text-center pb-0.5 bg-purple-50/60 border-l border-r border-purple-200">
+                        <span className="text-[7px] font-bold text-purple-600 leading-tight block px-0.5 truncate" title={(col.data as EventHeader).name}>
+                          {(col.data as EventHeader).name}
                         </span>
                       </th>
                     ))}
@@ -503,39 +513,38 @@ export default function AdminAttendancePage() {
                         {sortBy === 'percentage' && (sortAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
                       </span>
                     </th>
-                    {sessions.map((s) => (
-                      <th key={s.id} style={{ width: CELL_W }} className={cn(
+                    {gridColumns.map((col) => col.type === 'session' ? (
+                      <th key={getColId(col)} style={{ width: CELL_W }} className={cn(
                         'pb-2 text-center',
-                        s.isCancelled && 'bg-red-50/50',
-                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
-                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
+                        col.data.isCancelled && 'bg-red-50/50',
+                        col.data.isFuture && !col.data.isCancelled && 'bg-blue-50/50',
+                        !col.data.isCancelled && !col.data.isFuture && !col.data.hasAttendance && 'bg-amber-50/50'
                       )}>
                         <div className="flex flex-col items-center gap-0.5">
                           <span className={cn(
                             'font-medium text-[10px]',
-                            s.isCancelled ? 'text-red-400 line-through' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : 'text-brand-muted'
+                            col.data.isCancelled ? 'text-red-400 line-through' : col.data.isFuture ? 'text-blue-400' : !col.data.hasAttendance ? 'text-amber-400' : 'text-brand-muted'
                           )}>
-                            {getDayNum(s.date)}
+                            {getDayNum(col.data.date)}
                           </span>
                           <button
-                            onClick={() => sessionMutation.mutate({ sessionId: s.id, isCancelled: !s.isCancelled })}
+                            onClick={() => sessionMutation.mutate({ sessionId: col.data.id, isCancelled: !col.data.isCancelled })}
                             className={cn(
                               'w-4 h-4 rounded flex items-center justify-center cursor-pointer transition-colors',
-                              s.isCancelled
+                              col.data.isCancelled
                                 ? 'text-red-400 hover:text-emerald-500 hover:bg-emerald-50'
                                 : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
                             )}
-                            title={s.isCancelled ? 'Restore session' : 'Cancel session'}
+                            title={col.data.isCancelled ? 'Restore session' : 'Cancel session'}
                           >
-                            {s.isCancelled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                            {col.data.isCancelled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
                           </button>
                         </div>
                       </th>
-                    ))}
-                    {events.map((ev) => (
-                      <th key={ev.id} style={{ width: EVENT_W }} className="pb-2 text-center bg-purple-50/50 border-l border-purple-100">
-                        <span className="font-medium text-[9px] text-purple-500" title={`${ev.name} - ${ev.hours}h`}>
-                          {getDayNum(ev.date)}/{new Date(ev.date + 'T12:00:00').getMonth() + 1}
+                    ) : (
+                      <th key={getColId(col)} style={{ width: EVENT_W }} className="pb-2 text-center bg-purple-50/60 border-l border-r border-purple-200">
+                        <span className="font-medium text-[9px] text-purple-600" title={(col.data as EventHeader).name + ' - ' + (col.data as EventHeader).hours + 'h'}>
+                          {getDayNum(col.data.date)}
                         </span>
                       </th>
                     ))}
@@ -578,32 +587,31 @@ export default function AdminAttendancePage() {
                           {p.stats.percentage}%
                         </span>
                       </td>
-                      {sessions.map((s) => (
-                        <td key={s.id} style={{ width: CELL_W }} className={cn(
+                      {gridColumns.map((col, colIdx) => col.type === 'session' ? (
+                        <td key={getColId(col)} style={{ width: CELL_W }} className={cn(
                           'py-1 text-center',
-                          firstInMonth.has(s.id) && 'border-l-2 border-brand-navy/15',
-                          s.isCancelled && 'bg-red-50/30',
-                          s.isFuture && !s.isCancelled && 'bg-blue-50/30',
-                          !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/30'
+                          firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                          col.data.isCancelled && 'bg-red-50/30',
+                          col.data.isFuture && !col.data.isCancelled && 'bg-blue-50/30',
+                          !col.data.isCancelled && !col.data.isFuture && !col.data.hasAttendance && 'bg-amber-50/30'
                         )}>
-                          {s.isCancelled ? (
+                          {col.data.isCancelled ? (
                             <span className="w-5 h-5 inline-block text-red-300" title="Cancelled">—</span>
-                          ) : s.isFuture ? (
+                          ) : col.data.isFuture ? (
                             <span className="w-5 h-5 inline-block text-blue-200" title="Future">·</span>
                           ) : (
                           <StatusCell
-                            status={p.records[s.id]}
-                            sessionId={s.id}
+                            status={p.records[col.data.id]}
+                            sessionId={col.data.id}
                             participantId={p.id}
                             onToggle={handleToggle}
                           />
                           )}
                         </td>
-                      ))}
-                      {events.map((ev) => (
-                        <td key={ev.id} style={{ width: EVENT_W }} className="py-1 text-center bg-purple-50/20 border-l border-purple-100/50">
-                          {p.eventRecords?.[ev.id] ? (
-                            <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-purple-500 mx-auto" title={ev.name}>
+                      ) : (
+                        <td key={getColId(col)} style={{ width: EVENT_W }} className="py-1 text-center bg-purple-50/20 border-l border-r border-purple-100/50">
+                          {p.eventRecords?.[(col.data as EventHeader).id] ? (
+                            <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-purple-500 mx-auto" title={(col.data as EventHeader).name}>
                               ✓
                             </span>
                           ) : (
@@ -650,21 +658,20 @@ export default function AdminAttendancePage() {
                           {p.stats.percentage}%
                         </span>
                       </td>
-                      {sessions.map((s) => (
-                        <td key={s.id} style={{ width: CELL_W }} className={cn(
+                      {gridColumns.map((col, colIdx) => col.type === 'session' ? (
+                        <td key={getColId(col)} style={{ width: CELL_W }} className={cn(
                           'py-1 text-center',
-                          firstInMonth.has(s.id) && 'border-l-2 border-brand-navy/15',
+                          firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
                         )}>
-                          {p.records[s.id] ? (
+                          {p.records[col.data.id] ? (
                             <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-gray-400 mx-auto">
-                              {STATUS_COLORS[p.records[s.id]!]?.label || '?'}
+                              {STATUS_COLORS[p.records[col.data.id]!]?.label || '?'}
                             </span>
                           ) : null}
                         </td>
-                      ))}
-                      {events.map((ev) => (
-                        <td key={ev.id} style={{ width: EVENT_W }} className="py-1 text-center bg-purple-50/10 border-l border-purple-100/50">
-                          {p.eventRecords?.[ev.id] ? (
+                      ) : (
+                        <td key={getColId(col)} style={{ width: EVENT_W }} className="py-1 text-center bg-purple-50/10 border-l border-r border-purple-100/50">
+                          {p.eventRecords?.[(col.data as EventHeader).id] ? (
                             <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white bg-gray-400 mx-auto">✓</span>
                           ) : null}
                         </td>
