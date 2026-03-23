@@ -72,15 +72,15 @@ export async function GET(request: NextRequest) {
     // Determine which sessions have at least 1 attendance record
     const sessionsWithRecords = new Set(records.map((r) => r.session_id));
 
-    // Session info for grid headers — past sessions (both active and cancelled)
+    // Session info for grid headers — ALL sessions (past + future)
     const sessionHeaders = (sessions ?? [])
-      .filter((s) => s.session_date <= today)
       .map((s) => ({
         id: s.id,
         date: s.session_date,
         isLocked: s.is_locked,
         isCancelled: s.is_cancelled,
         hasAttendance: sessionsWithRecords.has(s.id),
+        isFuture: s.session_date > today,
       }));
 
     return NextResponse.json({

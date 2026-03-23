@@ -27,6 +27,7 @@ interface SessionHeader {
   isLocked: boolean;
   isCancelled: boolean;
   hasAttendance: boolean;
+  isFuture: boolean;
 }
 
 interface StatsResponse {
@@ -421,11 +422,12 @@ export default function AdminAttendancePage() {
                       <th key={s.id + '-day'} style={{ width: CELL_W }} className={cn(
                         'text-center pb-0.5',
                         s.isCancelled && 'bg-red-50/50',
-                        !s.isCancelled && !s.hasAttendance && 'bg-amber-50/50'
+                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
+                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
                       )}>
                         <span className={cn(
                           'text-[9px] font-bold',
-                          s.isCancelled ? 'text-red-300' : !s.hasAttendance ? 'text-amber-400' : getDayColor(s.date)
+                          s.isCancelled ? 'text-red-300' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : getDayColor(s.date)
                         )}>
                           {getDayAbbr(s.date)}
                         </span>
@@ -458,12 +460,13 @@ export default function AdminAttendancePage() {
                       <th key={s.id} style={{ width: CELL_W }} className={cn(
                         'pb-2 text-center',
                         s.isCancelled && 'bg-red-50/50',
-                        !s.isCancelled && !s.hasAttendance && 'bg-amber-50/50'
+                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
+                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
                       )}>
                         <div className="flex flex-col items-center gap-0.5">
                           <span className={cn(
                             'font-medium text-[10px]',
-                            s.isCancelled ? 'text-red-400 line-through' : !s.hasAttendance ? 'text-amber-400' : 'text-brand-muted'
+                            s.isCancelled ? 'text-red-400 line-through' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : 'text-brand-muted'
                           )}>
                             {getDayNum(s.date)}
                           </span>
@@ -493,7 +496,7 @@ export default function AdminAttendancePage() {
                         p.consecutiveAbsences >= 2 && 'bg-red-50/40'
                       )}
                     >
-                      <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-inherit py-1 pl-4 pr-2 whitespace-nowrap">
+                      <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-white py-1 pl-4 pr-2 whitespace-nowrap">
                         <span className="font-medium text-xs text-brand-dark-text">
                           {p.lastName}, {p.firstName}
                         </span>
@@ -503,7 +506,7 @@ export default function AdminAttendancePage() {
                           </Badge>
                         )}
                       </td>
-                      <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-inherit py-1 px-1 text-center">
+                      <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-white py-1 px-1 text-center border-r-2 border-gray-200">
                         <span className={cn(
                           'inline-block px-1.5 py-0.5 rounded text-[10px] font-bold',
                           getPercentageColor(p.stats.percentage),
@@ -517,10 +520,13 @@ export default function AdminAttendancePage() {
                           'py-1 text-center',
                           firstInMonth.has(s.id) && 'border-l-2 border-brand-navy/15',
                           s.isCancelled && 'bg-red-50/30',
-                          !s.isCancelled && !s.hasAttendance && 'bg-amber-50/30'
+                          s.isFuture && !s.isCancelled && 'bg-blue-50/30',
+                          !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/30'
                         )}>
                           {s.isCancelled ? (
                             <span className="w-5 h-5 inline-block text-red-300" title="Cancelled">—</span>
+                          ) : s.isFuture ? (
+                            <span className="w-5 h-5 inline-block text-blue-200" title="Future">·</span>
                           ) : (
                           <StatusCell
                             status={p.records[s.id]}
@@ -554,6 +560,10 @@ export default function AdminAttendancePage() {
               <span className="flex items-center gap-1">
                 <span className="w-4 h-4 rounded-md bg-amber-50 border border-amber-200 text-[9px]" />
                 No attendance taken
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-blue-50 border border-blue-200 text-blue-300 text-[9px] flex items-center justify-center">·</span>
+                Future
               </span>
               <span className="flex items-center gap-1">
                 <span className="w-4 h-4 rounded-md bg-red-50 text-red-300 text-[9px] flex items-center justify-center">—</span>
