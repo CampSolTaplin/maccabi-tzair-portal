@@ -26,6 +26,7 @@ interface SessionHeader {
   date: string;
   isLocked: boolean;
   isCancelled: boolean;
+  hasAttendance: boolean;
 }
 
 interface StatsResponse {
@@ -408,8 +409,15 @@ export default function AdminAttendancePage() {
                     <th style={{ minWidth: NAME_W }} className="sticky left-0 z-20 bg-white" />
                     <th style={{ minWidth: PCT_W }} className="sticky left-[200px] z-20 bg-white" />
                     {sessions.map((s) => (
-                      <th key={s.id + '-day'} style={{ width: CELL_W }} className="text-center pb-0.5">
-                        <span className={cn('text-[9px] font-bold', getDayColor(s.date))}>
+                      <th key={s.id + '-day'} style={{ width: CELL_W }} className={cn(
+                        'text-center pb-0.5',
+                        s.isCancelled && 'bg-red-50/50',
+                        !s.isCancelled && !s.hasAttendance && 'bg-amber-50/50'
+                      )}>
+                        <span className={cn(
+                          'text-[9px] font-bold',
+                          s.isCancelled ? 'text-red-300' : !s.hasAttendance ? 'text-amber-400' : getDayColor(s.date)
+                        )}>
                           {getDayAbbr(s.date)}
                         </span>
                       </th>
@@ -438,11 +446,15 @@ export default function AdminAttendancePage() {
                       </span>
                     </th>
                     {sessions.map((s) => (
-                      <th key={s.id} style={{ width: CELL_W }} className="pb-2 text-center">
+                      <th key={s.id} style={{ width: CELL_W }} className={cn(
+                        'pb-2 text-center',
+                        s.isCancelled && 'bg-red-50/50',
+                        !s.isCancelled && !s.hasAttendance && 'bg-amber-50/50'
+                      )}>
                         <div className="flex flex-col items-center gap-0.5">
                           <span className={cn(
                             'font-medium text-[10px]',
-                            s.isCancelled ? 'text-red-400 line-through' : 'text-brand-muted'
+                            s.isCancelled ? 'text-red-400 line-through' : !s.hasAttendance ? 'text-amber-400' : 'text-brand-muted'
                           )}>
                             {getDayNum(s.date)}
                           </span>
@@ -492,9 +504,13 @@ export default function AdminAttendancePage() {
                         </span>
                       </td>
                       {sessions.map((s) => (
-                        <td key={s.id} style={{ width: CELL_W }} className={cn('py-1 text-center', s.isCancelled && 'bg-gray-50/80')}>
+                        <td key={s.id} style={{ width: CELL_W }} className={cn(
+                          'py-1 text-center',
+                          s.isCancelled && 'bg-red-50/30',
+                          !s.isCancelled && !s.hasAttendance && 'bg-amber-50/30'
+                        )}>
                           {s.isCancelled ? (
-                            <span className="w-5 h-5 inline-block text-gray-300" title="Cancelled">—</span>
+                            <span className="w-5 h-5 inline-block text-red-300" title="Cancelled">—</span>
                           ) : (
                           <StatusCell
                             status={p.records[s.id]}
@@ -526,7 +542,11 @@ export default function AdminAttendancePage() {
                 Absent (no record)
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-4 h-4 rounded-md bg-gray-50 text-gray-300 text-[9px] flex items-center justify-center">—</span>
+                <span className="w-4 h-4 rounded-md bg-amber-50 border border-amber-200 text-[9px]" />
+                No attendance taken
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-red-50 text-red-300 text-[9px] flex items-center justify-center">—</span>
                 Cancelled
               </span>
             </div>

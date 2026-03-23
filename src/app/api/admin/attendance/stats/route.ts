@@ -63,6 +63,9 @@ export async function GET(request: NextRequest) {
     // Sort by last name
     participantStats.sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
 
+    // Determine which sessions have at least 1 attendance record
+    const sessionsWithRecords = new Set(records.map((r) => r.session_id));
+
     // Session info for grid headers — past sessions (both active and cancelled)
     const sessionHeaders = (sessions ?? [])
       .filter((s) => s.session_date <= today)
@@ -71,6 +74,7 @@ export async function GET(request: NextRequest) {
         date: s.session_date,
         isLocked: s.is_locked,
         isCancelled: s.is_cancelled,
+        hasAttendance: sessionsWithRecords.has(s.id),
       }));
 
     return NextResponse.json({

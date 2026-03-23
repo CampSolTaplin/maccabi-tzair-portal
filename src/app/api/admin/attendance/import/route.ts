@@ -127,11 +127,12 @@ export async function POST(request: NextRequest) {
       sessionMap.set(s.session_date, s.id);
     }
 
-    let imported = 0;
     const skipped: string[] = [];
     const errors: string[] = [];
 
-    // Process each data row
+    // Build all upsert records at once
+    const upserts: { session_id: string; participant_id: string; status: string; marked_at: string }[] = [];
+
     for (let rowIdx = 1; rowIdx < rows.length; rowIdx++) {
       const row = rows[rowIdx];
       const rawName = String(row[0] ?? '').trim();
@@ -139,14 +140,14 @@ export async function POST(request: NextRequest) {
 
       const parsed = parseName(rawName);
       if (!parsed) {
-        skipped.push(`Row ${rowIdx + 1}: Could not parse name "${rawName}"`);
+        skipped.push(rawName);
         continue;
       }
 
       const key = `${parsed.lastName.toLowerCase()}|${parsed.firstName.toLowerCase()}`;
       const profileId = profileMap.get(key);
       if (!profileId) {
-        skipped.push(`Row ${rowIdx + 1}: No matching profile for "${rawName}"`);
+        skipped.push(rawName);
         continue;
       }
 
@@ -156,35 +157,40 @@ export async function POST(request: NextRequest) {
         if (cellValue !== 'P' && cellValue !== 'L' && cellValue !== 'E') continue;
 
         const sessionId = sessionMap.get(dc.date);
-        if (!sessionId) {
-          errors.push(`No session found for date ${dc.date} in group ${groupId}`);
-          continue;
-        }
+        if (!sessionId) continue;
 
         const status = cellValue === 'P' ? 'present' : cellValue === 'L' ? 'late' : 'excused';
-
-        const { error: upsertError } = await supabase
-          .from('attendance_records')
-          .upsert(
-            {
-              session_id: sessionId,
-              participant_id: profileId,
-              status,
-            },
-            { onConflict: 'session_id,participant_id' }
-          );
-
-        if (upsertError) {
-          errors.push(
-            `Failed to upsert attendance for "${rawName}" on ${dc.date}: ${upsertError.message}`
-          );
-        } else {
-          imported++;
-        }
+        upserts.push({
+          session_id: sessionId,
+          participant_id: profileId,
+          status,
+          marked_at: new Date().toISOString(),
+        });
       }
     }
 
-    return NextResponse.json({ imported, skipped, errors });
+    // Batch upsert in chunks of 500
+    let imported = 0;
+    for (let i = 0; i < upserts.length; i += 500) {
+      const chunk = upserts.slice(i, i + 500);
+      const { error: upsertError } = await supabase
+        .from('attendance_records')
+        .upsert(chunk, { onConflict: 'session_id,participant_id' });
+
+      if (upsertError) {
+        errors.push(`Batch ${Math.floor(i / 500) + 1}: ${upsertError.message}`);
+      } else {
+        imported += chunk.length;
+      }
+    }
+
+    return NextResponse.json({
+      imported,
+      skipped,
+      errors,
+      totalRows: rows.length - 1,
+      dateColumns: dateColumns.length,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: `Import failed: ${message}` }, { status: 500 });
