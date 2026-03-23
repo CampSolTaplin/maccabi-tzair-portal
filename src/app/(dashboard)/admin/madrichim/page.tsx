@@ -15,15 +15,22 @@ import {
   Mail,
   Phone,
   ChevronDown,
+  Crown,
+  Clipboard,
+  Check,
+  UserCog,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
-interface Madrich {
+type UserRole = 'admin' | 'coordinator' | 'madrich';
+
+interface UserRecord {
   id: string;
   firstName: string;
   lastName: string;
   email: string | null;
   phone: string | null;
+  role: UserRole;
   isActive: boolean;
   groupId: string | null;
   groupName: string | null;
@@ -37,24 +44,43 @@ interface GroupOption {
   area: string;
 }
 
+type FilterTab = 'all' | 'admin' | 'coordinator' | 'madrich';
+
 const AREA_COLORS: Record<string, string> = {
   katan: 'bg-blue-100 text-blue-700',
   noar: 'bg-purple-100 text-purple-700',
   leadership: 'bg-amber-100 text-amber-700',
 };
 
-export default function AdminMadrichimPage() {
+const ROLE_CONFIG: Record<UserRole, { label: string; color: string; icon: typeof Shield }> = {
+  admin: { label: 'Admin', color: 'bg-red-100 text-red-700', icon: Crown },
+  coordinator: { label: 'Coordinator', color: 'bg-indigo-100 text-indigo-700', icon: UserCog },
+  madrich: { label: 'Madrich', color: 'bg-emerald-100 text-emerald-700', icon: Shield },
+};
+
+const FILTER_TABS: { key: FilterTab; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'admin', label: 'Admins' },
+  { key: 'coordinator', label: 'Coordinators' },
+  { key: 'madrich', label: 'Madrichim' },
+];
+
+export default function AdminUsersPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [newFirst, setNewFirst] = useState('');
   const [newLast, setNewLast] = useState('');
   const [newEmail, setNewEmail] = useState('');
+  const [newRole, setNewRole] = useState<UserRole>('madrich');
   const [newGroupId, setNewGroupId] = useState('');
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
+  const [copiedPassword, setCopiedPassword] = useState(false);
   const [reassigning, setReassigning] = useState<string | null>(null);
+  const [changingRole, setChangingRole] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
 
-  const { data, isLoading, error } = useQuery<{ madrichim: Madrich[] }>({
-    queryKey: ['admin-madrichim'],
+  const { data, isLoading, error } = useQuery<{ users: UserRecord[] }>({
+    queryKey: ['admin-users'],
     queryFn: async () => {
       const res = await fetch('/api/admin/madrichim');
       if (!res.ok) throw new Error('Failed to load');
@@ -73,12 +99,28 @@ export default function AdminMadrichimPage() {
   });
 
   const groups = groupsData?.groups ?? [];
-  const madrichim = data?.madrichim ?? [];
-  const active = madrichim.filter((m) => m.isActive);
-  const inactive = madrichim.filter((m) => !m.isActive);
+  const allUsers = data?.users ?? [];
+
+  const admins = allUsers.filter((u) => u.role === 'admin');
+  const coordinators = allUsers.filter((u) => u.role === 'coordinator');
+  const madrichim = allUsers.filter((u) => u.role === 'madrich');
+
+  const filteredUsers = activeFilter === 'all'
+    ? allUsers
+    : allUsers.filter((u) => u.role === activeFilter);
+
+  const activeFiltered = filteredUsers.filter((u) => u.isActive);
+  const inactiveFiltered = filteredUsers.filter((u) => !u.isActive);
+
+  // Group active users by role for display
+  const activeByRole = {
+    admin: activeFiltered.filter((u) => u.role === 'admin'),
+    coordinator: activeFiltered.filter((u) => u.role === 'coordinator'),
+    madrich: activeFiltered.filter((u) => u.role === 'madrich'),
+  };
 
   const createMutation = useMutation({
-    mutationFn: async (body: { email: string; firstName: string; lastName: string; groupId: string }) => {
+    mutationFn: async (body: { email: string; firstName: string; lastName: string; role: UserRole; groupId?: string }) => {
       const res = await fetch('/api/admin/madrichim', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -92,16 +134,18 @@ export default function AdminMadrichimPage() {
     },
     onSuccess: (data) => {
       setCreatedPassword(data.madrich.generatedPassword);
+      setCopiedPassword(false);
       setNewFirst('');
       setNewLast('');
       setNewEmail('');
+      setNewRole('madrich');
       setNewGroupId('');
-      queryClient.invalidateQueries({ queryKey: ['admin-madrichim'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
   });
 
   const actionMutation = useMutation({
-    mutationFn: async (body: { profileId: string; action: string; groupId?: string }) => {
+    mutationFn: async (body: { profileId: string; action: string; groupId?: string; role?: string }) => {
       const res = await fetch('/api/admin/madrichim', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -112,101 +156,294 @@ export default function AdminMadrichimPage() {
     },
     onSuccess: () => {
       setReassigning(null);
-      queryClient.invalidateQueries({ queryKey: ['admin-madrichim'] });
+      setChangingRole(null);
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
   });
 
   function handleCreate() {
-    if (!newFirst || !newLast || !newEmail || !newGroupId) return;
-    createMutation.mutate({ email: newEmail, firstName: newFirst, lastName: newLast, groupId: newGroupId });
+    if (!newFirst || !newLast || !newEmail) return;
+    if ((newRole === 'coordinator' || newRole === 'madrich') && !newGroupId) return;
+    createMutation.mutate({
+      email: newEmail,
+      firstName: newFirst,
+      lastName: newLast,
+      role: newRole,
+      groupId: newRole === 'admin' ? undefined : newGroupId,
+    });
+  }
+
+  function handleCopyPassword() {
+    if (createdPassword) {
+      navigator.clipboard.writeText(createdPassword);
+      setCopiedPassword(true);
+      setTimeout(() => setCopiedPassword(false), 2000);
+    }
+  }
+
+  const needsGroup = newRole === 'coordinator' || newRole === 'madrich';
+  const canCreate = newFirst && newLast && newEmail && (newRole === 'admin' || newGroupId);
+
+  const inputClass = 'rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20';
+
+  function renderUserCard(user: UserRecord) {
+    const config = ROLE_CONFIG[user.role];
+    const RoleIcon = config.icon;
+
+    return (
+      <Card key={user.id} className={cn('hover:shadow-sm transition-shadow', !user.isActive && 'opacity-60')}>
+        <CardContent className="flex items-center justify-between py-3">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className={cn(
+              'h-10 w-10 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0',
+              user.isActive ? 'bg-brand-navy/10 text-brand-navy' : 'bg-gray-100 text-gray-400'
+            )}>
+              {user.firstName[0]}{user.lastName[0]}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className={cn('font-semibold', user.isActive ? 'text-brand-dark-text' : 'text-gray-500')}>
+                  {user.firstName} {user.lastName}
+                </p>
+                {changingRole === user.id ? (
+                  <select
+                    autoFocus
+                    defaultValue={user.role}
+                    onChange={(e) => {
+                      const newR = e.target.value as UserRole;
+                      if (newR !== user.role) {
+                        actionMutation.mutate({ profileId: user.id, action: 'change_role', role: newR });
+                      } else {
+                        setChangingRole(null);
+                      }
+                    }}
+                    onBlur={() => setChangingRole(null)}
+                    className="rounded-md border border-gray-200 px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="coordinator">Coordinator</option>
+                    <option value="madrich">Madrich</option>
+                  </select>
+                ) : (
+                  <button
+                    onClick={() => setChangingRole(user.id)}
+                    className="cursor-pointer"
+                    title="Click to change role"
+                  >
+                    <Badge className={cn('text-xs', config.color)}>
+                      <RoleIcon className="h-3 w-3 mr-1" />
+                      {config.label}
+                    </Badge>
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-3 mt-0.5 text-xs text-brand-muted">
+                {user.email && (
+                  <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{user.email}</span>
+                )}
+                {user.phone && (
+                  <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{user.phone}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Group badge (only for coordinator/madrich) */}
+            {(user.role === 'coordinator' || user.role === 'madrich') && user.isActive && (
+              <>
+                {reassigning === user.id ? (
+                  <select
+                    autoFocus
+                    defaultValue={user.groupId ?? ''}
+                    onChange={(e) => {
+                      if (e.target.value && e.target.value !== user.groupId) {
+                        actionMutation.mutate({ profileId: user.id, action: 'reassign', groupId: e.target.value });
+                      } else {
+                        setReassigning(null);
+                      }
+                    }}
+                    onBlur={() => setReassigning(null)}
+                    className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                  >
+                    <option value="">No group</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <button
+                    onClick={() => setReassigning(user.id)}
+                    className="cursor-pointer"
+                    title="Click to reassign group"
+                  >
+                    {user.groupName ? (
+                      <Badge className={cn('text-xs', AREA_COLORS[user.groupArea ?? ''] ?? 'bg-gray-100 text-gray-600')}>
+                        {user.groupName}
+                        <ChevronDown className="h-3 w-3 ml-1" />
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-red-50 text-red-600 text-xs">
+                        No group <ChevronDown className="h-3 w-3 ml-1" />
+                      </Badge>
+                    )}
+                  </button>
+                )}
+              </>
+            )}
+
+            {user.isActive ? (
+              <button
+                onClick={() => {
+                  if (confirm(`Deactivate ${user.firstName} ${user.lastName}?`)) {
+                    actionMutation.mutate({ profileId: user.id, action: 'deactivate' });
+                  }
+                }}
+                className="p-1.5 rounded-md text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                title="Deactivate"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => actionMutation.mutate({ profileId: user.id, action: 'reactivate' })}
+              >
+                Reactivate
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-brand-navy">Madrichim</h2>
-          <p className="mt-1 text-sm text-brand-muted">Manage group leaders and their assignments</p>
+          <h2 className="text-2xl font-bold text-brand-navy">Users</h2>
+          <p className="mt-1 text-sm text-brand-muted">Manage administrators, coordinators, and madrichim</p>
         </div>
         <Button onClick={() => { setShowCreate(!showCreate); setCreatedPassword(null); }}>
           {showCreate ? <X className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
-          {showCreate ? 'Cancel' : 'Add Madrich'}
+          {showCreate ? 'Cancel' : 'Add User'}
         </Button>
       </div>
 
-      {/* Summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
-            <Shield className="h-5 w-5 text-brand-navy" />
+            <Users className="h-5 w-5 text-brand-navy" />
             <div>
-              <p className="text-2xl font-bold text-brand-dark-text">{active.length}</p>
-              <p className="text-xs text-brand-muted">Active</p>
+              <p className="text-2xl font-bold text-brand-dark-text">{allUsers.filter((u) => u.isActive).length}</p>
+              <p className="text-xs text-brand-muted">Total Users</p>
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
-            <Users className="h-5 w-5 text-emerald-500" />
+            <Crown className="h-5 w-5 text-red-500" />
             <div>
-              <p className="text-2xl font-bold text-brand-dark-text">
-                {new Set(active.filter((m) => m.groupId).map((m) => m.groupId)).size}
-              </p>
-              <p className="text-xs text-brand-muted">Groups covered</p>
+              <p className="text-2xl font-bold text-brand-dark-text">{admins.filter((u) => u.isActive).length}</p>
+              <p className="text-xs text-brand-muted">Admins</p>
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
-            <AlertTriangle className={cn('h-5 w-5', inactive.length > 0 ? 'text-amber-500' : 'text-gray-300')} />
+            <UserCog className="h-5 w-5 text-indigo-500" />
             <div>
-              <p className="text-2xl font-bold text-brand-dark-text">{inactive.length}</p>
-              <p className="text-xs text-brand-muted">Inactive</p>
+              <p className="text-2xl font-bold text-brand-dark-text">{coordinators.filter((u) => u.isActive).length}</p>
+              <p className="text-xs text-brand-muted">Coordinators</p>
             </div>
           </CardContent>
         </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 py-4">
+            <Shield className="h-5 w-5 text-emerald-500" />
+            <div>
+              <p className="text-2xl font-bold text-brand-dark-text">{madrichim.filter((u) => u.isActive).length}</p>
+              <p className="text-xs text-brand-muted">Madrichim</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+        {FILTER_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveFilter(tab.key)}
+            className={cn(
+              'px-4 py-1.5 text-sm font-medium rounded-md transition-colors cursor-pointer',
+              activeFilter === tab.key
+                ? 'bg-white text-brand-navy shadow-sm'
+                : 'text-brand-muted hover:text-brand-dark-text'
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Create form */}
       {showCreate && (
         <Card className="border-brand-navy/20">
           <CardContent className="py-5 space-y-4">
-            <h3 className="font-semibold text-brand-dark-text">Add New Madrich</h3>
+            <h3 className="font-semibold text-brand-dark-text">Add New User</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input
                 placeholder="First name"
                 value={newFirst}
                 onChange={(e) => setNewFirst(e.target.value)}
-                className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                className={inputClass}
               />
               <input
                 placeholder="Last name"
                 value={newLast}
                 onChange={(e) => setNewLast(e.target.value)}
-                className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                className={inputClass}
               />
               <input
                 placeholder="Email"
                 type="email"
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
-                className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                className={inputClass}
               />
               <select
-                value={newGroupId}
-                onChange={(e) => setNewGroupId(e.target.value)}
-                className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                value={newRole}
+                onChange={(e) => {
+                  setNewRole(e.target.value as UserRole);
+                  if (e.target.value === 'admin') setNewGroupId('');
+                }}
+                className={inputClass}
               >
-                <option value="">Select group...</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
+                <option value="admin">Admin</option>
+                <option value="coordinator">Coordinator</option>
+                <option value="madrich">Madrich</option>
               </select>
+              {needsGroup && (
+                <select
+                  value={newGroupId}
+                  onChange={(e) => setNewGroupId(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Select group...</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div className="flex items-center gap-3">
               <Button
                 onClick={handleCreate}
-                disabled={createMutation.isPending || !newFirst || !newLast || !newEmail || !newGroupId}
+                disabled={createMutation.isPending || !canCreate}
               >
                 {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
                 Create
@@ -217,10 +454,23 @@ export default function AdminMadrichimPage() {
             </div>
             {createdPassword && (
               <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm">
-                <p className="font-semibold text-emerald-800">Madrich created!</p>
-                <p className="text-emerald-700 mt-1">
-                  Temporary password: <code className="font-mono bg-white px-2 py-0.5 rounded">{createdPassword}</code>
-                </p>
+                <p className="font-semibold text-emerald-800">User created!</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-emerald-700">
+                    Temporary password: <code className="font-mono bg-white px-2 py-0.5 rounded">{createdPassword}</code>
+                  </p>
+                  <button
+                    onClick={handleCopyPassword}
+                    className="p-1 rounded hover:bg-emerald-100 transition-colors cursor-pointer"
+                    title="Copy password"
+                  >
+                    {copiedPassword ? (
+                      <Check className="h-4 w-4 text-emerald-600" />
+                    ) : (
+                      <Clipboard className="h-4 w-4 text-emerald-600" />
+                    )}
+                  </button>
+                </div>
               </div>
             )}
           </CardContent>
@@ -244,119 +494,48 @@ export default function AdminMadrichimPage() {
         </Card>
       )}
 
-      {/* Active madrichim */}
-      {!isLoading && active.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">Active Madrichim</h3>
-          <div className="space-y-2">
-            {active.map((m) => (
-              <Card key={m.id} className="hover:shadow-sm transition-shadow">
-                <CardContent className="flex items-center justify-between py-3">
-                  <div className="flex items-center gap-4 min-w-0">
-                    <div className="h-10 w-10 rounded-full bg-brand-navy/10 flex items-center justify-center text-brand-navy font-bold text-sm flex-shrink-0">
-                      {m.firstName[0]}{m.lastName[0]}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="font-semibold text-brand-dark-text">
-                        {m.firstName} {m.lastName}
-                      </p>
-                      <div className="flex items-center gap-3 mt-0.5 text-xs text-brand-muted">
-                        {m.email && (
-                          <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{m.email}</span>
-                        )}
-                        {m.phone && (
-                          <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{m.phone}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {reassigning === m.id ? (
-                      <select
-                        autoFocus
-                        defaultValue={m.groupId ?? ''}
-                        onChange={(e) => {
-                          if (e.target.value && e.target.value !== m.groupId) {
-                            actionMutation.mutate({ profileId: m.id, action: 'reassign', groupId: e.target.value });
-                          } else {
-                            setReassigning(null);
-                          }
-                        }}
-                        onBlur={() => setReassigning(null)}
-                        className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
-                      >
-                        <option value="">No group</option>
-                        {groups.map((g) => (
-                          <option key={g.id} value={g.id}>{g.name}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <button
-                        onClick={() => setReassigning(m.id)}
-                        className="cursor-pointer"
-                        title="Click to reassign group"
-                      >
-                        {m.groupName ? (
-                          <Badge className={cn('text-xs', AREA_COLORS[m.groupArea ?? ''] ?? 'bg-gray-100 text-gray-600')}>
-                            {m.groupName}
-                            <ChevronDown className="h-3 w-3 ml-1" />
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-red-50 text-red-600 text-xs">
-                            No group <ChevronDown className="h-3 w-3 ml-1" />
-                          </Badge>
-                        )}
-                      </button>
-                    )}
-
-                    <button
-                      onClick={() => {
-                        if (confirm(`Deactivate ${m.firstName} ${m.lastName}?`)) {
-                          actionMutation.mutate({ profileId: m.id, action: 'deactivate' });
-                        }
-                      }}
-                      className="p-1.5 rounded-md text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                      title="Deactivate"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+      {/* Active users grouped by role */}
+      {!isLoading && activeFiltered.length > 0 && (
+        <div className="space-y-6">
+          {(activeFilter === 'all' ? (['admin', 'coordinator', 'madrich'] as UserRole[]) : [activeFilter as UserRole]).map((role) => {
+            const usersInRole = activeByRole[role];
+            if (!usersInRole || usersInRole.length === 0) return null;
+            const config = ROLE_CONFIG[role];
+            return (
+              <div key={role}>
+                <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">
+                  {role === 'admin' ? 'Administrators' : role === 'coordinator' ? 'Coordinators' : 'Madrichim'}
+                  {' '}({usersInRole.length})
+                </h3>
+                <div className="space-y-2">
+                  {usersInRole.map((u) => renderUserCard(u))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
       {/* Inactive */}
-      {!isLoading && inactive.length > 0 && (
+      {!isLoading && inactiveFiltered.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">Inactive</h3>
+          <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">
+            Inactive ({inactiveFiltered.length})
+          </h3>
           <div className="space-y-2">
-            {inactive.map((m) => (
-              <Card key={m.id} className="opacity-60">
-                <CardContent className="flex items-center justify-between py-3">
-                  <div className="flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 font-bold text-sm">
-                      {m.firstName[0]}{m.lastName[0]}
-                    </div>
-                    <div>
-                      <p className="font-medium text-gray-500">{m.firstName} {m.lastName}</p>
-                      <p className="text-xs text-gray-400">{m.email}</p>
-                    </div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => actionMutation.mutate({ profileId: m.id, action: 'reactivate' })}
-                  >
-                    Reactivate
-                  </Button>
-                </CardContent>
-              </Card>
-            ))}
+            {inactiveFiltered.map((u) => renderUserCard(u))}
           </div>
         </div>
+      )}
+
+      {/* Empty state */}
+      {!isLoading && !error && allUsers.length === 0 && (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <Users className="h-12 w-12 text-gray-300 mb-3" />
+            <p className="text-brand-muted">No users found. Create your first user above.</p>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

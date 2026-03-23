@@ -35,7 +35,7 @@ async function requireAdmin(supabase: ReturnType<typeof createAdminClient>) {
   return { user };
 }
 
-/* ─── GET: list all madrichim ─── */
+/* ─── GET: list all users (admin, coordinator, madrich) ─── */
 
 export async function GET() {
   try {
@@ -43,18 +43,19 @@ export async function GET() {
     const auth = await requireAdmin(supabase);
     if ('error' in auth && auth.error) return auth.error;
 
-    // Get all profiles with role=madrich (including inactive)
+    // Get all profiles (all roles)
     const { data: profiles, error: profilesError } = await supabase
       .from('profiles')
       .select('id, first_name, last_name, role, phone, is_active')
-      .eq('role', 'madrich')
+      .in('role', ['admin', 'coordinator', 'madrich'])
+      .order('role')
       .order('last_name');
 
     if (profilesError) {
       throw new Error(`Failed to fetch profiles: ${profilesError.message}`);
     }
 
-    // Get group memberships for madrichim
+    // Get group memberships for coordinator and madrich users
     const profileIds = (profiles ?? []).map((p) => p.id);
     const { data: memberships, error: membershipError } = await supabase
       .from('group_memberships')
@@ -66,7 +67,7 @@ export async function GET() {
         groups (id, name, slug, area)
       `)
       .in('profile_id', profileIds.length > 0 ? profileIds : ['__none__'])
-      .eq('role', 'madrich');
+      .in('role', ['madrich', 'coordinator']);
 
     if (membershipError) {
       throw new Error(`Failed to fetch memberships: ${membershipError.message}`);
@@ -109,7 +110,7 @@ export async function GET() {
       });
     }
 
-    const madrichim = (profiles ?? []).map((p) => {
+    const allUsers = (profiles ?? []).map((p) => {
       const membership = membershipMap.get(p.id);
       return {
         id: p.id,
@@ -117,6 +118,7 @@ export async function GET() {
         lastName: p.last_name,
         email: emailMap.get(p.id) ?? null,
         phone: p.phone,
+        role: p.role as 'admin' | 'coordinator' | 'madrich',
         isActive: p.is_active ?? true,
         groupId: membership?.groupId ?? null,
         groupName: membership?.groupName ?? null,
@@ -125,17 +127,18 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ madrichim });
+    // Also return as "madrichim" for backward compatibility
+    return NextResponse.json({ users: allUsers, madrichim: allUsers });
   } catch (err) {
-    console.error('Madrichim fetch error:', err);
+    console.error('Users fetch error:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to fetch madrichim' },
+      { error: err instanceof Error ? err.message : 'Failed to fetch users' },
       { status: 500 }
     );
   }
 }
 
-/* ─── POST: create new madrich ─── */
+/* ─── POST: create new user ─── */
 
 export async function POST(request: NextRequest) {
   try {
@@ -143,11 +146,27 @@ export async function POST(request: NextRequest) {
     const auth = await requireAdmin(supabase);
     if ('error' in auth && auth.error) return auth.error;
 
-    const { email, firstName, lastName, groupId } = await request.json();
+    const { email, firstName, lastName, groupId, role } = await request.json();
+    const userRole = role ?? 'madrich';
 
-    if (!email || !firstName || !lastName || !groupId) {
+    if (!email || !firstName || !lastName) {
       return NextResponse.json(
-        { error: 'email, firstName, lastName, and groupId are required' },
+        { error: 'email, firstName, and lastName are required' },
+        { status: 400 }
+      );
+    }
+
+    // coordinator and madrich require a group
+    if ((userRole === 'coordinator' || userRole === 'madrich') && !groupId) {
+      return NextResponse.json(
+        { error: 'groupId is required for coordinator and madrich roles' },
+        { status: 400 }
+      );
+    }
+
+    if (!['admin', 'coordinator', 'madrich'].includes(userRole)) {
+      return NextResponse.json(
+        { error: 'role must be admin, coordinator, or madrich' },
         { status: 400 }
       );
     }
@@ -160,7 +179,7 @@ export async function POST(request: NextRequest) {
       password,
       email_confirm: true,
       user_metadata: {
-        role: 'madrich',
+        role: userRole,
         first_name: firstName,
         last_name: lastName,
       },
@@ -178,7 +197,7 @@ export async function POST(request: NextRequest) {
         id: userId,
         first_name: firstName,
         last_name: lastName,
-        role: 'madrich',
+        role: userRole,
         is_active: true,
       },
       { onConflict: 'id' }
@@ -188,16 +207,18 @@ export async function POST(request: NextRequest) {
       throw new Error(`Failed to create profile: ${profileError.message}`);
     }
 
-    // 3. Create group membership
-    const { error: membershipError } = await supabase.from('group_memberships').insert({
-      profile_id: userId,
-      group_id: groupId,
-      role: 'madrich',
-      is_active: true,
-    });
+    // 3. Create group membership (for coordinator and madrich)
+    if ((userRole === 'coordinator' || userRole === 'madrich') && groupId) {
+      const { error: membershipError } = await supabase.from('group_memberships').insert({
+        profile_id: userId,
+        group_id: groupId,
+        role: userRole,
+        is_active: true,
+      });
 
-    if (membershipError) {
-      throw new Error(`Failed to assign group: ${membershipError.message}`);
+      if (membershipError) {
+        throw new Error(`Failed to assign group: ${membershipError.message}`);
+      }
     }
 
     return NextResponse.json({
@@ -207,20 +228,21 @@ export async function POST(request: NextRequest) {
         email,
         firstName,
         lastName,
-        groupId,
+        role: userRole,
+        groupId: groupId ?? null,
         generatedPassword: password,
       },
     });
   } catch (err) {
-    console.error('Madrich creation error:', err);
+    console.error('User creation error:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to create madrich' },
+      { error: err instanceof Error ? err.message : 'Failed to create user' },
       { status: 500 }
     );
   }
 }
 
-/* ─── PATCH: update group assignment or deactivate ─── */
+/* ─── PATCH: update group assignment, deactivate, reactivate, or change role ─── */
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -228,7 +250,7 @@ export async function PATCH(request: NextRequest) {
     const auth = await requireAdmin(supabase);
     if ('error' in auth && auth.error) return auth.error;
 
-    const { profileId, action, groupId } = await request.json();
+    const { profileId, action, groupId, role } = await request.json();
 
     if (!profileId || !action) {
       return NextResponse.json(
@@ -242,18 +264,27 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: 'groupId is required for reassign' }, { status: 400 });
       }
 
-      // Deactivate existing madrich memberships for this profile
+      // Get current role to use correct membership role
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', profileId)
+        .single();
+
+      const membershipRole = profile?.role === 'coordinator' ? 'coordinator' : 'madrich';
+
+      // Deactivate existing memberships for this profile
       await supabase
         .from('group_memberships')
         .update({ is_active: false })
         .eq('profile_id', profileId)
-        .eq('role', 'madrich');
+        .in('role', ['madrich', 'coordinator']);
 
       // Insert new active membership
       const { error: insertError } = await supabase.from('group_memberships').insert({
         profile_id: profileId,
         group_id: groupId,
-        role: 'madrich',
+        role: membershipRole,
         is_active: true,
       });
 
@@ -280,7 +311,7 @@ export async function PATCH(request: NextRequest) {
         .from('group_memberships')
         .update({ is_active: false })
         .eq('profile_id', profileId)
-        .eq('role', 'madrich');
+        .in('role', ['madrich', 'coordinator']);
 
       return NextResponse.json({ success: true, action: 'deactivated' });
     }
@@ -298,11 +329,62 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: true, action: 'reactivated' });
     }
 
+    if (action === 'change_role') {
+      if (!role || !['admin', 'coordinator', 'madrich'].includes(role)) {
+        return NextResponse.json(
+          { error: 'Valid role (admin, coordinator, madrich) is required' },
+          { status: 400 }
+        );
+      }
+
+      // Update profile role
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ role })
+        .eq('id', profileId);
+
+      if (profileError) {
+        throw new Error(`Failed to change role: ${profileError.message}`);
+      }
+
+      // Update auth user metadata
+      await supabase.auth.admin.updateUserById(profileId, {
+        user_metadata: { role },
+      });
+
+      // If changing to admin, deactivate group memberships (admins don't have groups)
+      if (role === 'admin') {
+        await supabase
+          .from('group_memberships')
+          .update({ is_active: false })
+          .eq('profile_id', profileId)
+          .in('role', ['madrich', 'coordinator']);
+      }
+
+      // If changing from admin to coordinator/madrich and groupId provided, create membership
+      if ((role === 'coordinator' || role === 'madrich') && groupId) {
+        await supabase
+          .from('group_memberships')
+          .update({ is_active: false })
+          .eq('profile_id', profileId)
+          .in('role', ['madrich', 'coordinator']);
+
+        await supabase.from('group_memberships').insert({
+          profile_id: profileId,
+          group_id: groupId,
+          role,
+          is_active: true,
+        });
+      }
+
+      return NextResponse.json({ success: true, action: 'role_changed', newRole: role });
+    }
+
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (err) {
-    console.error('Madrich update error:', err);
+    console.error('User update error:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to update madrich' },
+      { error: err instanceof Error ? err.message : 'Failed to update user' },
       { status: 500 }
     );
   }
