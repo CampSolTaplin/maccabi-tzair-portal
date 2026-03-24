@@ -1,544 +1,311 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils/cn';
 import {
-  Upload,
-  FileSpreadsheet,
-  Users,
-  UserPlus,
-  UserMinus,
-  RefreshCw,
-  TrendingUp,
-  TrendingDown,
-  ChevronDown,
-  ChevronUp,
-  BarChart3,
-  ArrowRight,
-  Loader2,
-  XCircle,
+  Upload, FileSpreadsheet, Users, UserPlus, UserMinus, TrendingUp, TrendingDown,
+  ChevronDown, ChevronUp, ArrowRight, Loader2, XCircle, BarChart3, RefreshCw, Trash2,
 } from 'lucide-react';
 
 /* ─── Types ─── */
-
-interface AnalyticsSummary {
-  lastYear: { total: number; year: string };
-  thisYear: { total: number; year: string };
-  returned: number;
-  new: number;
-  lost: number;
-  retentionRate: number;
-  growthRate: number;
-}
-
-interface GroupRow {
-  slug: string;
-  name: string;
-  lastYear: number;
-  thisYear: number;
-  returned: number;
-  new: number;
-  lost: number;
-  retentionPct: number;
-  attendancePct: number | null;
-}
-
-interface LostParticipant {
-  name: string;
-  group: string;
-  grade: string;
-  contactId: string;
-}
-
-interface ReturnedParticipant {
-  name: string;
-  lastYearGroup: string;
-  thisYearGroup: string;
-  transitioned: boolean;
-}
-
-interface AnalyticsData {
-  summary: AnalyticsSummary;
-  byGroup: GroupRow[];
-  lostParticipants: LostParticipant[];
-  returnedParticipants: ReturnedParticipant[];
-}
-
-/* ─── Group Display Map ─── */
-
-const GROUP_ORDER: Record<string, string> = {
-  'katan-kinder': 'Kinder',
-  'katan-1st': '1st Grade',
-  'katan-2nd': '2nd Grade',
-  'katan-3rd': '3rd Grade',
-  'katan-4th': '4th Grade',
-  'katan-5th': '5th Grade',
-  'noar-6th': '6th Grade',
-  'noar-7th': '7th Grade',
-  'noar-8th': '8th Grade',
-  'pre-som': 'Pre-SOM',
-  'som': 'SOM',
-};
-
-/* ─── Helper Components ─── */
-
-function SummaryCard({
-  label,
-  value,
-  subtitle,
-  icon: Icon,
-  color,
-}: {
-  label: string;
-  value: string | number;
-  subtitle?: string;
-  icon: React.ElementType;
-  color: 'navy' | 'coral' | 'green' | 'red';
-}) {
-  const colorMap = {
-    navy: 'bg-brand-light-blue text-brand-navy',
-    coral: 'bg-brand-coral/10 text-brand-coral',
-    green: 'bg-emerald-50 text-emerald-700',
-    red: 'bg-red-50 text-red-700',
-  };
-
-  return (
-    <Card>
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-sm font-medium text-brand-muted">{label}</p>
-            <p className="mt-1 text-3xl font-bold text-brand-dark-text">{value}</p>
-            {subtitle && (
-              <p className="mt-0.5 text-xs text-brand-muted">{subtitle}</p>
-            )}
-          </div>
-          <div className={cn('rounded-lg p-2.5', colorMap[color])}>
-            <Icon className="h-5 w-5" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function DeltaBar({ lastYear, thisYear }: { lastYear: number; thisYear: number }) {
-  const delta = thisYear - lastYear;
-  const maxAbs = Math.max(Math.abs(delta), 1);
-  const width = Math.min(Math.abs(delta) * 8, 60);
-
-  if (delta === 0) {
-    return <span className="text-xs text-brand-muted">--</span>;
-  }
-
-  return (
-    <div className="flex items-center gap-2">
-      <div
-        className={cn(
-          'h-3 rounded-full transition-all',
-          delta > 0 ? 'bg-emerald-400' : 'bg-red-400'
-        )}
-        style={{ width: `${width}px` }}
-      />
-      <span
-        className={cn(
-          'text-xs font-semibold',
-          delta > 0 ? 'text-emerald-700' : 'text-red-700'
-        )}
-      >
-        {delta > 0 ? '+' : ''}
-        {delta}
-      </span>
-    </div>
-  );
-}
-
-/* ─── Main Page ─── */
+interface Snapshot { id: string; year_label: string; total_count: number; uploaded_at: string }
+interface Summary { yearA: { label: string; total: number }; yearB: { label: string; total: number }; returned: number; new: number; lost: number; retentionRate: number; growthRate: number }
+interface GroupStat { slug: string; name: string; yearA: number; yearB: number; returned: number; new: number; lost: number; retentionPct: number }
+interface LostP { name: string; group: string; grade: string; contactId: string }
+interface ReturnedP { name: string; lastYearGroup: string; thisYearGroup: string; transitioned: boolean }
+interface CompareResult { summary: Summary; byGroup: GroupStat[]; lostParticipants: LostP[]; returnedParticipants: ReturnedP[] }
 
 export default function AnalyticsPage() {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const [lostExpanded, setLostExpanded] = useState(false);
-  const [transitionExpanded, setTransitionExpanded] = useState(false);
-  const [lostSortGroup, setLostSortGroup] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [yearLabel, setYearLabel] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  // Compare state
+  const [yearA, setYearA] = useState('');
+  const [yearB, setYearB] = useState('2025-2026');
+  const [result, setResult] = useState<CompareResult | null>(null);
+  const [showLost, setShowLost] = useState(false);
+  const [showReturned, setShowReturned] = useState(false);
+  const [lostFilter, setLostFilter] = useState('all');
+
+  // Fetch snapshots
+  const { data: snapshotData, isLoading: loadingSnapshots } = useQuery<{ snapshots: Snapshot[]; currentYear: { year_label: string; total_count: number } }>({
+    queryKey: ['analytics-snapshots'],
+    queryFn: async () => { const r = await fetch('/api/admin/analytics'); if (!r.ok) throw new Error('Failed'); return r.json(); },
+  });
+
+  const snapshots = snapshotData?.snapshots ?? [];
+  const allYears = [...snapshots.map((s) => s.year_label), '2025-2026'].sort();
+
+  // Auto-select yearA when snapshots load
+  useEffect(() => {
+    if (snapshots.length > 0 && !yearA) {
+      setYearA(snapshots[0].year_label);
+    }
+  }, [snapshots, yearA]);
 
   // Upload mutation
-  const mutation = useMutation<AnalyticsData, Error, File>({
-    mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const res = await fetch('/api/admin/analytics', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Analysis failed (${res.status})`);
-      }
-
-      return res.json();
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedFile || !yearLabel) throw new Error('File and year required');
+      const fd = new FormData();
+      fd.append('file', selectedFile);
+      fd.append('year_label', yearLabel);
+      const r = await fetch('/api/admin/analytics', { method: 'POST', body: fd });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error); }
+      return r.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['analytics-snapshots'] });
+      setSelectedFile(null);
+      setYearLabel('');
     },
   });
 
-  const data = mutation.data;
-
-  /* ─── File Handling ─── */
-
-  const handleFile = useCallback(
-    (file: File) => {
-      mutation.mutate(file);
+  // Compare mutation
+  const compareMutation = useMutation({
+    mutationFn: async () => {
+      const r = await fetch('/api/admin/analytics', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ yearA, yearB }),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error); }
+      return r.json() as Promise<CompareResult>;
     },
-    [mutation]
-  );
+    onSuccess: (data) => setResult(data),
+  });
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setDragActive(false);
-      const droppedFile = e.dataTransfer.files?.[0];
-      if (droppedFile) handleFile(droppedFile);
-    },
-    [handleFile]
-  );
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(true);
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false);
+    const f = e.dataTransfer.files[0];
+    if (f?.name.endsWith('.xlsx')) setSelectedFile(f);
   }, []);
 
-  const handleDragLeave = useCallback(() => {
-    setDragActive(false);
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) setSelectedFile(f);
   }, []);
-
-  const handleFileInput = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const f = e.target.files?.[0];
-      if (f) handleFile(f);
-    },
-    [handleFile]
-  );
-
-  const handleReset = useCallback(() => {
-    mutation.reset();
-    setLostExpanded(false);
-    setTransitionExpanded(false);
-    setLostSortGroup(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [mutation]);
-
-  /* ─── Derived data ─── */
-
-  const transitioned = data?.returnedParticipants.filter((p) => p.transitioned) ?? [];
-
-  const sortedLost = data
-    ? [...data.lostParticipants].sort((a, b) => {
-        if (lostSortGroup) {
-          if (a.group === lostSortGroup && b.group !== lostSortGroup) return -1;
-          if (b.group === lostSortGroup && a.group !== lostSortGroup) return 1;
-        }
-        return a.group.localeCompare(b.group) || a.name.localeCompare(b.name);
-      })
-    : [];
-
-  const lostGroupOptions = data
-    ? [...new Set(data.lostParticipants.map((p) => p.group))].sort()
-    : [];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold text-brand-navy">
-          Year-over-Year Analytics
-        </h2>
-        <p className="mt-1 text-sm text-brand-muted">
-          Upload last year&apos;s Salesforce XLSX export to compare enrollment,
-          retention, and growth
-        </p>
+        <h2 className="text-2xl font-bold text-brand-navy">Year-over-Year Analytics</h2>
+        <p className="mt-1 text-sm text-brand-muted">Upload rosters from previous years and compare enrollment, retention, and growth</p>
       </div>
 
-      {/* Upload Area */}
+      {/* ─── Upload Section ─── */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <FileSpreadsheet className="h-5 w-5 text-brand-navy" />
-            <CardTitle>Upload Last Year&apos;s Roster</CardTitle>
-          </div>
-          <CardDescription>
-            Upload the Salesforce enrollment export (.xlsx) from the previous program
-            year
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Upload className="h-5 w-5" />
+            Upload Year Roster
+          </CardTitle>
         </CardHeader>
-        <CardContent>
-          {!data && !mutation.isPending ? (
+        <CardContent className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <select
+              value={yearLabel}
+              onChange={(e) => setYearLabel(e.target.value)}
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+            >
+              <option value="">Select year...</option>
+              <option value="2019-2020">2019-2020</option>
+              <option value="2020-2021">2020-2021</option>
+              <option value="2021-2022">2021-2022</option>
+              <option value="2022-2023">2022-2023</option>
+              <option value="2023-2024">2023-2024</option>
+              <option value="2024-2025">2024-2025</option>
+            </select>
             <div
               onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onClick={() => fileRef.current?.click()}
               className={cn(
-                'flex flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed p-12 cursor-pointer transition-all',
-                dragActive
-                  ? 'border-brand-navy bg-brand-light-blue'
-                  : 'border-gray-300 bg-gray-50 hover:border-brand-navy/50 hover:bg-brand-light-blue/50'
+                'flex-1 flex items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-3 cursor-pointer transition-colors',
+                dragOver ? 'border-brand-coral bg-brand-coral/5' : 'border-gray-200 hover:border-brand-navy/30'
               )}
             >
-              <div className="rounded-full bg-brand-light-blue p-4">
-                <Upload className="h-8 w-8 text-brand-navy" />
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-medium text-brand-dark-text">
-                  Drag and drop your XLSX file here, or click to browse
-                </p>
-                <p className="mt-1 text-xs text-brand-muted">
-                  Salesforce enrollment export from last year
-                </p>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleFileInput}
-                className="hidden"
-              />
+              <FileSpreadsheet className="h-4 w-4 text-brand-muted" />
+              <span className="text-sm text-brand-muted">
+                {selectedFile ? selectedFile.name : 'Drop XLSX or click to browse'}
+              </span>
+              <input ref={fileRef} type="file" accept=".xlsx" className="hidden" onChange={handleFileSelect} />
             </div>
-          ) : mutation.isPending ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-brand-navy" />
-              <p className="text-sm font-medium text-brand-muted">
-                Analyzing enrollment data...
-              </p>
-            </div>
+            <Button
+              onClick={() => uploadMutation.mutate()}
+              disabled={!selectedFile || !yearLabel || uploadMutation.isPending}
+            >
+              {uploadMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              Save
+            </Button>
+          </div>
+          {uploadMutation.isSuccess && (
+            <p className="text-sm text-emerald-600">Saved {yearLabel} with {uploadMutation.data?.total} participants</p>
+          )}
+          {uploadMutation.isError && (
+            <p className="text-sm text-red-600">{uploadMutation.error.message}</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ─── Saved Snapshots ─── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <BarChart3 className="h-5 w-5" />
+            Saved Years
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loadingSnapshots ? (
+            <Loader2 className="h-6 w-6 animate-spin text-brand-muted mx-auto" />
           ) : (
-            <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <div className="flex items-center gap-3">
-                <div className="rounded-lg bg-emerald-50 p-2">
-                  <BarChart3 className="h-5 w-5 text-emerald-600" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-brand-dark-text">
-                    Analysis complete
-                  </p>
-                  <p className="text-xs text-brand-muted">
-                    Compared {data?.summary.lastYear.total ?? 0} last-year participants
-                    with {data?.summary.thisYear.total ?? 0} current
-                  </p>
-                </div>
-              </div>
-              <Button size="sm" variant="ghost" onClick={handleReset}>
-                Upload New File
-              </Button>
+            <div className="flex flex-wrap gap-2">
+              {snapshots.map((s) => (
+                <Badge key={s.id} className="bg-brand-navy/10 text-brand-navy px-3 py-1.5 text-sm">
+                  {s.year_label} — {s.total_count} participants
+                </Badge>
+              ))}
+              <Badge className="bg-emerald-50 text-emerald-700 px-3 py-1.5 text-sm">
+                2025-2026 (current) — {snapshotData?.currentYear?.total_count ?? '...'} participants
+              </Badge>
+              {snapshots.length === 0 && (
+                <p className="text-sm text-brand-muted">No years uploaded yet. Upload XLSX files above.</p>
+              )}
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Error */}
-      {mutation.isError && (
-        <Card className="border-red-200 bg-red-50">
-          <CardContent className="flex items-start gap-3 py-4">
-            <XCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-            <div>
-              <p className="font-medium text-red-800">Error</p>
-              <p className="mt-1 text-sm text-red-700">{mutation.error.message}</p>
+      {/* ─── Compare Section ─── */}
+      {allYears.length >= 2 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <RefreshCw className="h-5 w-5" />
+              Compare Years
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <select value={yearA} onChange={(e) => setYearA(e.target.value)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white">
+                {allYears.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <ArrowRight className="h-4 w-4 text-brand-muted hidden sm:block" />
+              <span className="text-sm text-brand-muted sm:hidden">vs</span>
+              <select value={yearB} onChange={(e) => setYearB(e.target.value)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white">
+                {allYears.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <Button onClick={() => compareMutation.mutate()} disabled={!yearA || !yearB || yearA === yearB || compareMutation.isPending}>
+                {compareMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Compare'}
+              </Button>
             </div>
+            {compareMutation.isError && (
+              <div className="flex items-center gap-2 text-red-600 text-sm">
+                <XCircle className="h-4 w-4" /> {compareMutation.error.message}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
 
-      {/* Results */}
-      {data && (
+      {/* ─── Results ─── */}
+      {result && (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <SummaryCard
-              label="Last Year Total"
-              value={data.summary.lastYear.total}
-              subtitle={data.summary.lastYear.year}
-              icon={Users}
-              color="navy"
-            />
-            <SummaryCard
-              label="This Year Total"
-              value={data.summary.thisYear.total}
-              subtitle={data.summary.thisYear.year}
-              icon={Users}
-              color="coral"
-            />
-            <SummaryCard
-              label="Retention Rate"
-              value={`${data.summary.retentionRate}%`}
-              subtitle={`${data.summary.returned} returned`}
-              icon={RefreshCw}
-              color="green"
-            />
-            <SummaryCard
-              label="Growth Rate"
-              value={`${data.summary.growthRate > 0 ? '+' : ''}${data.summary.growthRate}%`}
-              subtitle={`${data.summary.new} new participants`}
-              icon={data.summary.growthRate >= 0 ? TrendingUp : TrendingDown}
-              color={data.summary.growthRate >= 0 ? 'green' : 'red'}
-            />
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <Card>
+              <CardContent className="py-4 text-center">
+                <p className="text-2xl font-bold text-brand-dark-text">{result.summary.yearA.total}</p>
+                <p className="text-xs text-brand-muted">{result.summary.yearA.label}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="py-4 text-center">
+                <p className="text-2xl font-bold text-brand-dark-text">{result.summary.yearB.total}</p>
+                <p className="text-xs text-brand-muted">{result.summary.yearB.label}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="py-4 text-center">
+                <p className="text-2xl font-bold text-emerald-600">{result.summary.retentionRate}%</p>
+                <p className="text-xs text-brand-muted">Retention</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="py-4 text-center">
+                <p className={cn('text-2xl font-bold', result.summary.growthRate >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                  {result.summary.growthRate > 0 ? '+' : ''}{result.summary.growthRate}%
+                </p>
+                <p className="text-xs text-brand-muted">Growth</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="py-4 text-center">
+                <div className="flex justify-center gap-3">
+                  <div><p className="text-lg font-bold text-emerald-600">{result.summary.returned}</p><p className="text-[10px] text-brand-muted">Returned</p></div>
+                  <div><p className="text-lg font-bold text-blue-600">{result.summary.new}</p><p className="text-[10px] text-brand-muted">New</p></div>
+                  <div><p className="text-lg font-bold text-red-500">{result.summary.lost}</p><p className="text-[10px] text-brand-muted">Lost</p></div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
-          {/* Retention Overview */}
+          {/* Growth by Group */}
           <Card>
             <CardHeader>
-              <CardTitle>Retention Overview</CardTitle>
-              <CardDescription>
-                Breakdown of returned, new, and lost participants
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="flex flex-col items-center rounded-xl bg-emerald-50 p-6">
-                  <div className="rounded-full bg-emerald-100 p-3">
-                    <RefreshCw className="h-6 w-6 text-emerald-700" />
-                  </div>
-                  <p className="mt-3 text-3xl font-bold text-emerald-700">
-                    {data.summary.returned}
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-emerald-600">Returned</p>
-                </div>
-                <div className="flex flex-col items-center rounded-xl bg-blue-50 p-6">
-                  <div className="rounded-full bg-blue-100 p-3">
-                    <UserPlus className="h-6 w-6 text-blue-700" />
-                  </div>
-                  <p className="mt-3 text-3xl font-bold text-blue-700">
-                    {data.summary.new}
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-blue-600">New</p>
-                </div>
-                <div className="flex flex-col items-center rounded-xl bg-red-50 p-6">
-                  <div className="rounded-full bg-red-100 p-3">
-                    <UserMinus className="h-6 w-6 text-red-700" />
-                  </div>
-                  <p className="mt-3 text-3xl font-bold text-red-700">
-                    {data.summary.lost}
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-red-600">Lost</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Growth by Group Table */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <BarChart3 className="h-5 w-5 text-brand-navy" />
-                <CardTitle>Growth by Group</CardTitle>
-              </div>
-              <CardDescription>
-                Year-over-year enrollment comparison per group
-              </CardDescription>
+              <CardTitle className="text-lg">Growth by Group</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-gray-200 text-left">
-                      <th className="pb-3 pr-4 font-medium text-brand-muted">Group</th>
-                      <th className="pb-3 pr-4 text-center font-medium text-brand-muted">
-                        Last Year
-                      </th>
-                      <th className="pb-3 pr-4 text-center font-medium text-brand-muted">
-                        This Year
-                      </th>
-                      <th className="pb-3 pr-4 font-medium text-brand-muted">Delta</th>
-                      <th className="pb-3 pr-4 text-center font-medium text-brand-muted">
-                        Retention
-                      </th>
-                      <th className="pb-3 text-center font-medium text-brand-muted">
-                        Attendance
-                      </th>
+                    <tr className="border-b text-left text-brand-muted">
+                      <th className="py-2 pr-4">Group</th>
+                      <th className="py-2 px-2 text-center">{result.summary.yearA.label}</th>
+                      <th className="py-2 px-2 text-center">{result.summary.yearB.label}</th>
+                      <th className="py-2 px-2 text-center">Delta</th>
+                      <th className="py-2 px-2 text-center">Retention</th>
+                      <th className="py-2 px-2">Visual</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {data.byGroup
-                      .filter((g) => g.lastYear > 0 || g.thisYear > 0)
-                      .map((g) => (
-                        <tr key={g.slug} className="hover:bg-gray-50">
-                          <td className="py-3 pr-4 font-medium text-brand-dark-text">
-                            {g.name}
+                  <tbody>
+                    {result.byGroup.filter((g) => g.yearA > 0 || g.yearB > 0).map((g) => {
+                      const delta = g.yearB - g.yearA;
+                      const maxCount = Math.max(...result.byGroup.map((x) => Math.max(x.yearA, x.yearB)), 1);
+                      return (
+                        <tr key={g.slug} className="border-b border-gray-50">
+                          <td className="py-2 pr-4 font-medium text-brand-dark-text">{g.name}</td>
+                          <td className="py-2 px-2 text-center">{g.yearA}</td>
+                          <td className="py-2 px-2 text-center font-semibold">{g.yearB}</td>
+                          <td className="py-2 px-2 text-center">
+                            <span className={cn('font-semibold', delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-red-500' : 'text-gray-400')}>
+                              {delta > 0 ? '+' : ''}{delta}
+                            </span>
                           </td>
-                          <td className="py-3 pr-4 text-center text-brand-muted">
-                            {g.lastYear}
+                          <td className="py-2 px-2 text-center">
+                            <Badge className={cn('text-xs', g.retentionPct >= 70 ? 'bg-emerald-50 text-emerald-700' : g.retentionPct >= 40 ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600')}>
+                              {g.retentionPct}%
+                            </Badge>
                           </td>
-                          <td className="py-3 pr-4 text-center font-semibold text-brand-dark-text">
-                            {g.thisYear}
-                          </td>
-                          <td className="py-3 pr-4">
-                            <DeltaBar lastYear={g.lastYear} thisYear={g.thisYear} />
-                          </td>
-                          <td className="py-3 pr-4 text-center">
-                            {g.lastYear > 0 ? (
-                              <Badge
-                                variant={
-                                  g.retentionPct >= 70
-                                    ? 'success'
-                                    : g.retentionPct >= 50
-                                      ? 'warning'
-                                      : 'danger'
-                                }
-                              >
-                                {g.retentionPct}%
-                              </Badge>
-                            ) : (
-                              <span className="text-xs text-brand-muted">--</span>
-                            )}
-                          </td>
-                          <td className="py-3 text-center">
-                            {g.attendancePct != null ? (
-                              <span className="text-sm text-brand-dark-text">
-                                {g.attendancePct}%
-                              </span>
-                            ) : (
-                              <span className="text-xs text-brand-muted">--</span>
-                            )}
+                          <td className="py-2 px-2 w-40">
+                            <div className="flex gap-0.5 items-end h-5">
+                              <div className="bg-brand-navy/30 rounded-sm" style={{ width: `${(g.yearA / maxCount) * 100}%`, height: '60%' }} />
+                              <div className="bg-brand-navy rounded-sm" style={{ width: `${(g.yearB / maxCount) * 100}%`, height: '100%' }} />
+                            </div>
                           </td>
                         </tr>
-                      ))}
+                      );
+                    })}
                   </tbody>
-                  <tfoot>
-                    <tr className="border-t-2 border-gray-200 font-semibold">
-                      <td className="pt-3 pr-4 text-brand-dark-text">Total</td>
-                      <td className="pt-3 pr-4 text-center text-brand-muted">
-                        {data.summary.lastYear.total}
-                      </td>
-                      <td className="pt-3 pr-4 text-center text-brand-dark-text">
-                        {data.summary.thisYear.total}
-                      </td>
-                      <td className="pt-3 pr-4">
-                        <DeltaBar
-                          lastYear={data.summary.lastYear.total}
-                          thisYear={data.summary.thisYear.total}
-                        />
-                      </td>
-                      <td className="pt-3 pr-4 text-center">
-                        <Badge
-                          variant={
-                            data.summary.retentionRate >= 70 ? 'success' : 'warning'
-                          }
-                        >
-                          {data.summary.retentionRate}%
-                        </Badge>
-                      </td>
-                      <td className="pt-3 text-center">--</td>
-                    </tr>
-                  </tfoot>
                 </table>
               </div>
             </CardContent>
@@ -546,167 +313,69 @@ export default function AnalyticsPage() {
 
           {/* Lost Participants */}
           <Card>
-            <CardHeader
-              className="cursor-pointer"
-              onClick={() => setLostExpanded(!lostExpanded)}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <UserMinus className="h-5 w-5 text-red-600" />
-                  <CardTitle className="text-base">
-                    Lost Participants ({data.lostParticipants.length})
-                  </CardTitle>
-                  <Badge variant="danger">Not returning</Badge>
-                </div>
-                {lostExpanded ? (
-                  <ChevronUp className="h-5 w-5 text-brand-muted" />
-                ) : (
-                  <ChevronDown className="h-5 w-5 text-brand-muted" />
-                )}
-              </div>
+            <CardHeader>
+              <button onClick={() => setShowLost(!showLost)} className="flex items-center justify-between w-full cursor-pointer">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <UserMinus className="h-5 w-5 text-red-500" />
+                  Lost Participants ({result.lostParticipants.length})
+                </CardTitle>
+                {showLost ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+              </button>
             </CardHeader>
-            {lostExpanded && (
+            {showLost && (
               <CardContent>
-                {/* Group filter */}
-                <div className="mb-4 flex flex-wrap gap-2">
-                  <button
-                    onClick={() => setLostSortGroup(null)}
-                    className={cn(
-                      'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                      !lostSortGroup
-                        ? 'bg-brand-navy text-white'
-                        : 'bg-gray-100 text-brand-muted hover:bg-gray-200'
-                    )}
-                  >
-                    All Groups
-                  </button>
-                  {lostGroupOptions.map((g) => (
-                    <button
-                      key={g}
-                      onClick={() =>
-                        setLostSortGroup(lostSortGroup === g ? null : g)
-                      }
-                      className={cn(
-                        'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                        lostSortGroup === g
-                          ? 'bg-brand-navy text-white'
-                          : 'bg-gray-100 text-brand-muted hover:bg-gray-200'
-                      )}
-                    >
-                      {g}
-                    </button>
+                <div className="flex flex-wrap gap-1 mb-3">
+                  <button onClick={() => setLostFilter('all')} className={cn('px-2.5 py-1 rounded-full text-xs font-medium transition-colors', lostFilter === 'all' ? 'bg-brand-navy text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')}>All</button>
+                  {[...new Set(result.lostParticipants.map((p) => p.group))].sort().map((g) => (
+                    <button key={g} onClick={() => setLostFilter(g)} className={cn('px-2.5 py-1 rounded-full text-xs font-medium transition-colors', lostFilter === g ? 'bg-brand-navy text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')}>{g}</button>
                   ))}
                 </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200 text-left">
-                        <th className="pb-2 pr-4 font-medium text-brand-muted">
-                          Name
-                        </th>
-                        <th className="pb-2 pr-4 font-medium text-brand-muted">
-                          Previous Group
-                        </th>
-                        <th className="pb-2 pr-4 font-medium text-brand-muted">
-                          Grade
-                        </th>
-                        <th className="pb-2 font-medium text-brand-muted">
-                          Contact ID
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {(lostSortGroup
-                        ? sortedLost.filter((p) => p.group === lostSortGroup)
-                        : sortedLost
-                      ).map((p, i) => (
-                        <tr key={i} className="hover:bg-gray-50">
-                          <td className="py-2 pr-4 text-brand-dark-text">
-                            {p.name}
-                          </td>
-                          <td className="py-2 pr-4">
-                            <Badge>{p.group}</Badge>
-                          </td>
-                          <td className="py-2 pr-4 text-brand-muted">
-                            {p.grade || '--'}
-                          </td>
-                          <td className="py-2 font-mono text-xs text-brand-muted">
-                            {p.contactId}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="max-h-80 overflow-y-auto space-y-1">
+                  {result.lostParticipants.filter((p) => lostFilter === 'all' || p.group === lostFilter).map((p, i) => (
+                    <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-gray-50 text-sm">
+                      <span className="font-medium text-brand-dark-text">{p.name}</span>
+                      <Badge className="bg-gray-100 text-gray-600 text-xs">{p.group}</Badge>
+                    </div>
+                  ))}
                 </div>
               </CardContent>
             )}
           </Card>
 
-          {/* Returned with Group Change */}
-          {transitioned.length > 0 && (
-            <Card>
-              <CardHeader
-                className="cursor-pointer"
-                onClick={() => setTransitionExpanded(!transitionExpanded)}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <ArrowRight className="h-5 w-5 text-blue-600" />
-                    <CardTitle className="text-base">
-                      Group Transitions ({transitioned.length})
-                    </CardTitle>
-                    <Badge variant="default">Moved groups</Badge>
-                  </div>
-                  {transitionExpanded ? (
-                    <ChevronUp className="h-5 w-5 text-brand-muted" />
-                  ) : (
-                    <ChevronDown className="h-5 w-5 text-brand-muted" />
+          {/* Returned with Transitions */}
+          <Card>
+            <CardHeader>
+              <button onClick={() => setShowReturned(!showReturned)} className="flex items-center justify-between w-full cursor-pointer">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <UserPlus className="h-5 w-5 text-emerald-600" />
+                  Returned Participants ({result.returnedParticipants.length})
+                  {result.returnedParticipants.filter((p) => p.transitioned).length > 0 && (
+                    <Badge className="bg-blue-50 text-blue-700 text-xs ml-2">
+                      {result.returnedParticipants.filter((p) => p.transitioned).length} changed group
+                    </Badge>
+                  )}
+                </CardTitle>
+                {showReturned ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+              </button>
+            </CardHeader>
+            {showReturned && (
+              <CardContent>
+                <div className="max-h-80 overflow-y-auto space-y-1">
+                  {result.returnedParticipants.filter((p) => p.transitioned).map((p, i) => (
+                    <div key={i} className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-50 text-sm">
+                      <span className="font-medium text-brand-dark-text min-w-0 truncate">{p.name}</span>
+                      <Badge className="bg-gray-100 text-gray-500 text-xs flex-shrink-0">{p.lastYearGroup}</Badge>
+                      <ArrowRight className="h-3 w-3 text-brand-muted flex-shrink-0" />
+                      <Badge className="bg-emerald-50 text-emerald-700 text-xs flex-shrink-0">{p.thisYearGroup}</Badge>
+                    </div>
+                  ))}
+                  {result.returnedParticipants.filter((p) => p.transitioned).length === 0 && (
+                    <p className="text-sm text-brand-muted py-2">No group transitions found</p>
                   )}
                 </div>
-              </CardHeader>
-              {transitionExpanded && (
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-gray-200 text-left">
-                          <th className="pb-2 pr-4 font-medium text-brand-muted">
-                            Name
-                          </th>
-                          <th className="pb-2 pr-4 font-medium text-brand-muted">
-                            Last Year
-                          </th>
-                          <th className="pb-2 pr-4 font-medium text-brand-muted" />
-                          <th className="pb-2 font-medium text-brand-muted">
-                            This Year
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {transitioned.map((p, i) => (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="py-2 pr-4 text-brand-dark-text">
-                              {p.name}
-                            </td>
-                            <td className="py-2 pr-4">
-                              <Badge variant="muted">{p.lastYearGroup}</Badge>
-                            </td>
-                            <td className="py-2 pr-4">
-                              <ArrowRight className="h-4 w-4 text-brand-muted" />
-                            </td>
-                            <td className="py-2">
-                              <Badge variant="success">{p.thisYearGroup}</Badge>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              )}
-            </Card>
-          )}
+              </CardContent>
+            )}
+          </Card>
         </>
       )}
     </div>
