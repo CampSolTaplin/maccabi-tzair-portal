@@ -13,8 +13,8 @@ import {
 
 /* ─── Types ─── */
 interface Snapshot { id: string; year_label: string; total_count: number; uploaded_at: string }
-interface Summary { yearA: { label: string; total: number }; yearB: { label: string; total: number }; returned: number; new: number; lost: number; retentionRate: number; growthRate: number }
-interface GroupStat { slug: string; name: string; yearA: number; yearB: number; returned: number; new: number; lost: number; retentionPct: number }
+interface Summary { yearA: { label: string; total: number }; yearB: { label: string; total: number }; returned: number; new: number; lost: number; graduated: number; expectedEntry: number; retentionRate: number; growthRate: number }
+interface GroupStat { slug: string; name: string; yearA: number; yearB: number; returned: number; graduated: number; new: number; lost: number; retentionPct: number }
 interface LostP { name: string; group: string; grade: string; contactId: string }
 interface ReturnedP { name: string; lastYearGroup: string; thisYearGroup: string; transitioned: boolean }
 interface CompareResult { summary: Summary; byGroup: GroupStat[]; lostParticipants: LostP[]; returnedParticipants: ReturnedP[] }
@@ -221,7 +221,7 @@ export default function AnalyticsPage() {
       {result && (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
             <Card>
               <CardContent className="py-4 text-center">
                 <p className="text-2xl font-bold text-brand-dark-text">{result.summary.yearA.total}</p>
@@ -248,12 +248,14 @@ export default function AnalyticsPage() {
                 <p className="text-xs text-brand-muted">Growth</p>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="sm:col-span-2">
               <CardContent className="py-4 text-center">
-                <div className="flex justify-center gap-3">
+                <div className="flex justify-center gap-4">
                   <div><p className="text-lg font-bold text-emerald-600">{result.summary.returned}</p><p className="text-[10px] text-brand-muted">Returned</p></div>
                   <div><p className="text-lg font-bold text-blue-600">{result.summary.new}</p><p className="text-[10px] text-brand-muted">New</p></div>
-                  <div><p className="text-lg font-bold text-red-500">{result.summary.lost}</p><p className="text-[10px] text-brand-muted">Lost</p></div>
+                  <div><p className="text-lg font-bold text-red-500">{result.summary.lost}</p><p className="text-[10px] text-brand-muted">Real Lost</p></div>
+                  <div><p className="text-lg font-bold text-purple-600">{result.summary.graduated}</p><p className="text-[10px] text-brand-muted">Graduated</p></div>
+                  <div><p className="text-lg font-bold text-gray-400">{result.summary.expectedEntry}</p><p className="text-[10px] text-brand-muted">Kinder Entry</p></div>
                 </div>
               </CardContent>
             </Card>

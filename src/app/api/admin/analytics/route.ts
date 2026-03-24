@@ -195,17 +195,36 @@ export async function PATCH(request: NextRequest) {
     const mapB = new Map<string, SnapshotParticipant>();
     for (const p of yearBParticipants) mapB.set(p.contactId, p);
 
-    // Compute retention
+    // Compute retention with business rules:
+    // - SOM participants from year A who are not in year B → "graduated", NOT "lost"
+    // - Kinder participants in year B who are not in year A → expected entry, NOT "new"
     const returned = new Set<string>();
     const lost = new Set<string>();
+    const graduated = new Set<string>();
     const newP = new Set<string>();
+    const expectedEntry = new Set<string>();
 
     for (const nid of mapA.keys()) {
-      if (mapB.has(nid)) returned.add(nid);
-      else lost.add(nid);
+      if (mapB.has(nid)) {
+        returned.add(nid);
+      } else {
+        const pA = mapA.get(nid)!;
+        if (pA.groupSlug === 'som') {
+          graduated.add(nid); // SOM → graduated, not lost
+        } else {
+          lost.add(nid);
+        }
+      }
     }
     for (const nid of mapB.keys()) {
-      if (!mapA.has(nid)) newP.add(nid);
+      if (!mapA.has(nid)) {
+        const pB = mapB.get(nid)!;
+        if (pB.groupSlug === 'katan-kinder') {
+          expectedEntry.add(nid); // Kinder → expected entry, not truly "new"
+        } else {
+          newP.add(nid);
+        }
+      }
     }
 
     // Per-group stats
@@ -213,19 +232,22 @@ export async function PATCH(request: NextRequest) {
       const aCount = yearAParticipants.filter((p) => p.groupSlug === slug).length;
       const bCount = yearBParticipants.filter((p) => p.groupSlug === slug).length;
       const retInGroup = [...returned].filter((nid) => mapA.get(nid)?.groupSlug === slug).length;
+      const gradInGroup = [...graduated].filter((nid) => mapA.get(nid)?.groupSlug === slug).length;
+      const lostInGroup = aCount - retInGroup - gradInGroup;
       return {
         slug,
         name: GROUP_DISPLAY[slug],
         yearA: aCount,
         yearB: bCount,
         returned: retInGroup,
+        graduated: gradInGroup,
         new: bCount - retInGroup,
-        lost: aCount - retInGroup,
+        lost: lostInGroup > 0 ? lostInGroup : 0,
         retentionPct: aCount > 0 ? Math.round((retInGroup / aCount) * 100) : 0,
       };
     });
 
-    // Lost participants
+    // Lost participants (excluding SOM graduates)
     const lostList = [...lost].map((nid) => {
       const p = mapA.get(nid)!;
       return { name: p.name, group: GROUP_DISPLAY[p.groupSlug] ?? p.groupSlug, grade: p.grade, contactId: p.contactId };
@@ -245,6 +267,15 @@ export async function PATCH(request: NextRequest) {
 
     const totalA = mapA.size;
     const totalB = mapB.size;
+    // For retention rate, exclude SOM graduates from the denominator (they completed the program)
+    const retentionBase = totalA - graduated.size;
+    const retentionRate = retentionBase > 0 ? Math.round((returned.size / retentionBase) * 100) : 0;
+
+    // Graduated participants list
+    const graduatedList = [...graduated].map((nid) => {
+      const p = mapA.get(nid)!;
+      return { name: p.name, group: GROUP_DISPLAY[p.groupSlug] ?? p.groupSlug };
+    });
 
     return NextResponse.json({
       summary: {
@@ -253,12 +284,15 @@ export async function PATCH(request: NextRequest) {
         returned: returned.size,
         new: newP.size,
         lost: lost.size,
-        retentionRate: totalA > 0 ? Math.round((returned.size / totalA) * 100) : 0,
+        graduated: graduated.size,
+        expectedEntry: expectedEntry.size,
+        retentionRate,
         growthRate: totalA > 0 ? Math.round(((totalB - totalA) / totalA) * 100) : 0,
       },
       byGroup: groupStats,
       lostParticipants: lostList,
       returnedParticipants: returnedList,
+      graduatedParticipants: graduatedList,
     });
   } catch (err) {
     console.error('Analytics compare error:', err);
