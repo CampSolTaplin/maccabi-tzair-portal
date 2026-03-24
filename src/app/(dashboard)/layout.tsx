@@ -48,8 +48,8 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
     { label: 'Sessions', href: '/admin/sessions', icon: Calendar },
     { label: 'Users', href: '/admin/madrichim', icon: Users },
     { label: 'Events', href: '/admin/events', icon: PartyPopper },
+    { label: 'Analytics', href: '/admin/analytics', icon: BarChart3 },
     { label: 'Community Hours', href: '/admin/hours', icon: Clock },
-    { label: 'Settings', href: '/admin/settings', icon: Settings, disabled: true },
     { label: 'Security', href: '/admin/security', icon: Shield },
     { label: 'Import', href: '/admin/roster-import', icon: FileUp },
   ],
@@ -142,7 +142,7 @@ export default function DashboardLayout({
       {/* Desktop Sidebar */}
       <aside
         className={cn(
-          'hidden md:flex flex-col bg-brand-navy text-white transition-all duration-300 ease-in-out',
+          'hidden md:flex flex-col h-screen sticky top-0 bg-brand-navy text-white transition-all duration-300 ease-in-out',
           sidebarCollapsed ? 'w-[72px]' : 'w-64'
         )}
       >
