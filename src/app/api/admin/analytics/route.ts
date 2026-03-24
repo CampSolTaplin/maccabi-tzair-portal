@@ -300,6 +300,167 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
+/* ─── PUT: multi-year trend + cohort analysis ─── */
+export async function PUT(request: NextRequest) {
+  try {
+    const db = createAdminClient();
+    const { years } = await request.json() as { years: string[] };
+
+    if (!years || years.length < 2) {
+      return NextResponse.json({ error: 'At least 2 years required' }, { status: 400 });
+    }
+
+    const sortedYears = [...years].sort();
+
+    // Load all snapshots
+    const yearData = new Map<string, SnapshotParticipant[]>();
+    for (const y of sortedYears) {
+      if (y === '2025-2026') {
+        yearData.set(y, await loadCurrentYear(db));
+      } else {
+        const { data, error } = await db.from('analytics_snapshots').select('participants').eq('year_label', y).single();
+        if (error || !data) return NextResponse.json({ error: `Snapshot ${y} not found` }, { status: 404 });
+        yearData.set(y, typeof data.participants === 'string' ? JSON.parse(data.participants) : data.participants);
+      }
+    }
+
+    // 1. Total enrollment trend
+    const enrollmentTrend = sortedYears.map((y) => ({ year: y, total: yearData.get(y)!.length }));
+
+    // 2. Per-group trend across years
+    const allSlugs = Object.keys(GROUP_DISPLAY);
+    const groupTrend = allSlugs.map((slug) => ({
+      slug,
+      name: GROUP_DISPLAY[slug],
+      counts: sortedYears.map((y) => ({
+        year: y,
+        count: yearData.get(y)!.filter((p) => p.groupSlug === slug).length,
+      })),
+    }));
+
+    // 3. Year-over-year retention chain
+    const retentionChain = [];
+    for (let i = 0; i < sortedYears.length - 1; i++) {
+      const yA = sortedYears[i];
+      const yB = sortedYears[i + 1];
+      const mapA = new Map<string, SnapshotParticipant>();
+      for (const p of yearData.get(yA)!) mapA.set(p.contactId, p);
+      const mapB = new Map<string, SnapshotParticipant>();
+      for (const p of yearData.get(yB)!) mapB.set(p.contactId, p);
+
+      let returned = 0, lost = 0, graduated = 0, newP = 0, expectedEntry = 0;
+      for (const [nid, pA] of mapA) {
+        if (mapB.has(nid)) returned++;
+        else if (pA.groupSlug === 'som') graduated++;
+        else lost++;
+      }
+      for (const [nid, pB] of mapB) {
+        if (!mapA.has(nid)) {
+          if (pB.groupSlug === 'katan-kinder') expectedEntry++;
+          else newP++;
+        }
+      }
+      const base = mapA.size - graduated;
+      retentionChain.push({
+        from: yA, to: yB,
+        totalA: mapA.size, totalB: mapB.size,
+        returned, lost, graduated, new: newP, expectedEntry,
+        retentionPct: base > 0 ? Math.round((returned / base) * 100) : 0,
+      });
+    }
+
+    // 4. Cohort tracking — follow natural group progression
+    // The natural progression: Kinder→1st→2nd→3rd→4th→5th→6th→7th→8th→Pre-SOM→SOM→(graduated)
+    const PROGRESSION: Record<string, string> = {
+      'katan-kinder': 'katan-1st',
+      'katan-1st': 'katan-2nd',
+      'katan-2nd': 'katan-3rd',
+      'katan-3rd': 'katan-4th',
+      'katan-4th': 'katan-5th',
+      'katan-5th': 'noar-6th',
+      'noar-6th': 'noar-7th',
+      'noar-7th': 'noar-8th',
+      'noar-8th': 'pre-som',
+      'pre-som': 'som',
+      'som': 'graduated',
+    };
+
+    // For each pair of consecutive years, track cohort movement
+    const cohorts = [];
+    if (sortedYears.length >= 2) {
+      const firstYear = sortedYears[0];
+      const firstData = yearData.get(firstYear)!;
+
+      // Group participants by their starting group in the first year
+      const startingGroups = new Map<string, Set<string>>();
+      for (const p of firstData) {
+        if (!startingGroups.has(p.groupSlug)) startingGroups.set(p.groupSlug, new Set());
+        startingGroups.get(p.groupSlug)!.add(p.contactId);
+      }
+
+      for (const [startSlug, contactIds] of startingGroups) {
+        const cohort: { year: string; expectedGroup: string; expectedGroupName: string; total: number; inExpected: number; inOther: number; lost: number; graduated: number }[] = [];
+        let currentExpected = startSlug;
+
+        for (let i = 0; i < sortedYears.length; i++) {
+          const y = sortedYears[i];
+          const yData = yearData.get(y)!;
+          const yMap = new Map<string, SnapshotParticipant>();
+          for (const p of yData) yMap.set(p.contactId, p);
+
+          let inExpected = 0, inOther = 0, lost = 0, grad = 0;
+          for (const nid of contactIds) {
+            const p = yMap.get(nid);
+            if (!p) {
+              if (currentExpected === 'graduated') grad++;
+              else lost++;
+            } else if (p.groupSlug === currentExpected) {
+              inExpected++;
+            } else {
+              inOther++;
+            }
+          }
+
+          cohort.push({
+            year: y,
+            expectedGroup: currentExpected,
+            expectedGroupName: currentExpected === 'graduated' ? 'Graduated' : (GROUP_DISPLAY[currentExpected] ?? currentExpected),
+            total: contactIds.size,
+            inExpected,
+            inOther,
+            lost,
+            graduated: grad,
+          });
+
+          // Advance to next expected group
+          if (i < sortedYears.length - 1) {
+            currentExpected = PROGRESSION[currentExpected] ?? 'graduated';
+          }
+        }
+
+        cohorts.push({
+          startGroup: GROUP_DISPLAY[startSlug] ?? startSlug,
+          startGroupSlug: startSlug,
+          startYear: firstYear,
+          size: contactIds.size,
+          journey: cohort,
+        });
+      }
+    }
+
+    return NextResponse.json({
+      years: sortedYears,
+      enrollmentTrend,
+      groupTrend: groupTrend.filter((g) => g.counts.some((c) => c.count > 0)),
+      retentionChain,
+      cohorts: cohorts.filter((c) => c.size > 0).sort((a, b) => b.size - a.size),
+    });
+  } catch (err) {
+    console.error('Analytics trend error:', err);
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Trend analysis failed' }, { status: 500 });
+  }
+}
+
 /* ─── Load current year from DB ─── */
 async function loadCurrentYear(db: ReturnType<typeof createAdminClient>): Promise<SnapshotParticipant[]> {
   const profiles = await fetchAllRows<{
