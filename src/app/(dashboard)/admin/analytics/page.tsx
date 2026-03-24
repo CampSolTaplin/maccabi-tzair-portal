@@ -344,7 +344,7 @@ export default function AnalyticsPage() {
             )}
           </Card>
 
-          {/* Returned with Transitions */}
+          {/* Returned Participants - organized by group */}
           <Card>
             <CardHeader>
               <button onClick={() => setShowReturned(!showReturned)} className="flex items-center justify-between w-full cursor-pointer">
@@ -362,19 +362,61 @@ export default function AnalyticsPage() {
             </CardHeader>
             {showReturned && (
               <CardContent>
-                <div className="max-h-80 overflow-y-auto space-y-1">
-                  {result.returnedParticipants.filter((p) => p.transitioned).map((p, i) => (
-                    <div key={i} className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-50 text-sm">
-                      <span className="font-medium text-brand-dark-text min-w-0 truncate">{p.name}</span>
-                      <Badge className="bg-gray-100 text-gray-500 text-xs flex-shrink-0">{p.lastYearGroup}</Badge>
-                      <ArrowRight className="h-3 w-3 text-brand-muted flex-shrink-0" />
-                      <Badge className="bg-emerald-50 text-emerald-700 text-xs flex-shrink-0">{p.thisYearGroup}</Badge>
+                {/* Group-by-group retention summary sorted by retention count desc */}
+                {(() => {
+                  const byGroup = new Map<string, ReturnedP[]>();
+                  for (const p of result.returnedParticipants) {
+                    const key = p.thisYearGroup;
+                    if (!byGroup.has(key)) byGroup.set(key, []);
+                    byGroup.get(key)!.push(p);
+                  }
+                  const sorted = [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length);
+                  const maxCount = sorted[0]?.[1]?.length ?? 1;
+
+                  return (
+                    <div className="space-y-3">
+                      {/* Visual bar summary */}
+                      <div className="space-y-1.5">
+                        {sorted.map(([group, members]) => (
+                          <div key={group} className="flex items-center gap-3">
+                            <span className="text-xs font-medium text-brand-dark-text w-20 text-right truncate">{group}</span>
+                            <div className="flex-1 h-5 bg-gray-50 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-emerald-500 rounded-full flex items-center justify-end pr-2"
+                                style={{ width: `${Math.max((members.length / maxCount) * 100, 8)}%` }}
+                              >
+                                <span className="text-[10px] font-bold text-white">{members.length}</span>
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-brand-muted w-16">
+                              {members.filter((p) => p.transitioned).length > 0 &&
+                                `${members.filter((p) => p.transitioned).length} moved`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Detailed list of transitions */}
+                      {result.returnedParticipants.filter((p) => p.transitioned).length > 0 && (
+                        <div className="mt-4 pt-3 border-t border-gray-100">
+                          <p className="text-xs font-semibold text-brand-muted uppercase tracking-wider mb-2">Group Transitions</p>
+                          <div className="max-h-60 overflow-y-auto space-y-1">
+                            {sorted.flatMap(([, members]) =>
+                              members.filter((p) => p.transitioned)
+                            ).map((p, i) => (
+                              <div key={i} className="flex items-center gap-2 py-1 px-2 rounded hover:bg-gray-50 text-sm">
+                                <span className="font-medium text-brand-dark-text min-w-0 truncate flex-1">{p.name}</span>
+                                <Badge className="bg-gray-100 text-gray-500 text-[10px] flex-shrink-0">{p.lastYearGroup}</Badge>
+                                <ArrowRight className="h-3 w-3 text-brand-muted flex-shrink-0" />
+                                <Badge className="bg-emerald-50 text-emerald-700 text-[10px] flex-shrink-0">{p.thisYearGroup}</Badge>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                  {result.returnedParticipants.filter((p) => p.transitioned).length === 0 && (
-                    <p className="text-sm text-brand-muted py-2">No group transitions found</p>
-                  )}
-                </div>
+                  );
+                })()}
               </CardContent>
             )}
           </Card>
