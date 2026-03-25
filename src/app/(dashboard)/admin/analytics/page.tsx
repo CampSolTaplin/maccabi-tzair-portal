@@ -24,7 +24,7 @@ interface TrendResult {
   enrollmentTrend: { year: string; total: number }[];
   groupTrend: { slug: string; name: string; counts: { year: string; count: number }[] }[];
   retentionChain: { from: string; to: string; totalA: number; totalB: number; returned: number; lost: number; graduated: number; new: number; expectedEntry: number; retentionPct: number }[];
-  cohorts: { startGroup: string; startGroupSlug: string; startYear: string; size: number; journey: { year: string; expectedGroup: string; expectedGroupName: string; total: number; inExpected: number; inOther: number; lost: number; graduated: number }[] }[];
+  cohorts: { startGroup: string; startGroupSlug: string; currentGroup: string; currentGroupSlug: string; startYear: string; size: number; journey: { year: string; expectedGroup: string; expectedGroupName: string; total: number; inExpected: number; inOther: number; lost: number; graduated: number }[] }[];
 }
 
 /* ─── CSV Download Helper ─── */
@@ -473,8 +473,8 @@ export default function AnalyticsPage() {
                     <div key={ci} className="border rounded-lg p-3">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <Badge className="bg-brand-navy text-white text-xs">{cohort.startGroup} ({cohort.startYear})</Badge>
-                          <span className="text-xs text-brand-muted">Started with {cohort.size} participants</span>
+                          <Badge className="bg-brand-navy text-white text-xs">{cohort.currentGroup} ({trendResult.years[trendResult.years.length - 1]})</Badge>
+                          <span className="text-xs text-brand-muted">Was {cohort.startGroup} in {cohort.startYear} · Started with {cohort.size}</span>
                         </div>
                         <Badge className={cn('text-xs', retentionPct >= 70 ? 'bg-emerald-50 text-emerald-700' : retentionPct >= 40 ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600')}>
                           {retentionPct}% retained
@@ -501,9 +501,9 @@ export default function AnalyticsPage() {
                 })}
               </div>
               <Button variant="outline" size="sm" className="mt-3" onClick={() => {
-                const headers = ['Starting Group', 'Starting Year', 'Initial Size', ...trendResult.years.map((y) => `Active (${y})`), 'Final Retention%'];
+                const headers = ['Current Group', 'Starting Group', 'Starting Year', 'Initial Size', ...trendResult.years.map((y) => `Active (${y})`), 'Final Retention%'];
                 const rows = trendResult.cohorts.map((c) => [
-                  c.startGroup, c.startYear, String(c.size),
+                  c.currentGroup, c.startGroup, c.startYear, String(c.size),
                   ...c.journey.map((j) => String(j.inExpected + j.inOther)),
                   `${Math.round(((c.journey[c.journey.length - 1].inExpected + c.journey[c.journey.length - 1].inOther) / c.size) * 100)}%`,
                 ]);

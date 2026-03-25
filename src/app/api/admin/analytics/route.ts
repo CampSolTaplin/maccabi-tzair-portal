@@ -438,9 +438,16 @@ export async function PUT(request: NextRequest) {
           }
         }
 
+        // Calculate the current (last) year's expected group for this cohort
+        const lastStep = cohort[cohort.length - 1];
+        const currentGroupSlug = lastStep.expectedGroup;
+        const currentGroupName = lastStep.expectedGroupName;
+
         cohorts.push({
           startGroup: GROUP_DISPLAY[startSlug] ?? startSlug,
           startGroupSlug: startSlug,
+          currentGroup: currentGroupName,
+          currentGroupSlug: currentGroupSlug,
           startYear: firstYear,
           size: contactIds.size,
           journey: cohort,
@@ -448,12 +455,20 @@ export async function PUT(request: NextRequest) {
       }
     }
 
+    // Sort cohorts by current year's expected group order (Kinder→SOM→Graduated)
+    const GROUP_ORDER = [
+      'katan-kinder', 'katan-1st', 'katan-2nd', 'katan-3rd', 'katan-4th', 'katan-5th',
+      'noar-6th', 'noar-7th', 'noar-8th', 'pre-som', 'som', 'graduated',
+    ];
+
     return NextResponse.json({
       years: sortedYears,
       enrollmentTrend,
       groupTrend: groupTrend.filter((g) => g.counts.some((c) => c.count > 0)),
       retentionChain,
-      cohorts: cohorts.filter((c) => c.size > 0).sort((a, b) => b.size - a.size),
+      cohorts: cohorts
+        .filter((c) => c.size > 0)
+        .sort((a, b) => GROUP_ORDER.indexOf(a.currentGroupSlug) - GROUP_ORDER.indexOf(b.currentGroupSlug)),
     });
   } catch (err) {
     console.error('Analytics trend error:', err);
@@ -461,36 +476,52 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-/* ─── Load current year from DB ─── */
+/* ─── Load current year from DB (membership-driven, matches Groups tab) ─── */
 async function loadCurrentYear(db: ReturnType<typeof createAdminClient>): Promise<SnapshotParticipant[]> {
+  // Start from active memberships in program groups (same source as Groups tab)
+  const { data: groups } = await db.from('groups').select('id, slug, name').eq('is_active', true);
+  const groupById = new Map<string, { slug: string; name: string }>();
+  const validGroupIds: string[] = [];
+  for (const g of groups ?? []) {
+    if (Object.keys(GROUP_DISPLAY).includes(g.slug)) {
+      groupById.set(g.id, { slug: g.slug, name: g.name });
+      validGroupIds.push(g.id);
+    }
+  }
+
+  const memberships = await fetchAllRows<{ profile_id: string; group_id: string }>((from, to) =>
+    db.from('group_memberships').select('profile_id, group_id')
+      .eq('role', 'participant').eq('is_active', true)
+      .in('group_id', validGroupIds)
+      .range(from, to)
+  );
+
+  // Get unique profile IDs from memberships
+  const profileIds = [...new Set(memberships.map((m) => m.profile_id))];
+
+  // Build membership map: profile_id → slug (first valid group)
+  const memMap = new Map<string, string>();
+  for (const m of memberships) {
+    if (memMap.has(m.profile_id)) continue; // first group wins
+    const g = groupById.get(m.group_id);
+    if (g) memMap.set(m.profile_id, g.slug);
+  }
+
+  // Fetch profiles for these members
   const profiles = await fetchAllRows<{
     id: string; first_name: string; last_name: string; salesforce_contact_id: string | null; gender: string | null; grade: string | null;
   }>((from, to) =>
     db.from('profiles').select('id, first_name, last_name, salesforce_contact_id, gender, grade')
-      .eq('role', 'participant').eq('is_active', true).range(from, to)
+      .in('id', profileIds)
+      .range(from, to)
   );
-
-  const memberships = await fetchAllRows<{ profile_id: string; group_id: string }>((from, to) =>
-    db.from('group_memberships').select('profile_id, group_id').eq('role', 'participant').eq('is_active', true).range(from, to)
-  );
-
-  const { data: groups } = await db.from('groups').select('id, slug, name').eq('is_active', true);
-  const groupById = new Map<string, { slug: string; name: string }>();
-  for (const g of groups ?? []) groupById.set(g.id, { slug: g.slug, name: g.name });
-
-  const memMap = new Map<string, string>();
-  for (const m of memberships) {
-    const g = groupById.get(m.group_id);
-    if (g && Object.keys(GROUP_DISPLAY).includes(g.slug)) {
-      memMap.set(m.profile_id, g.slug);
-    }
-  }
 
   const result: SnapshotParticipant[] = [];
   for (const p of profiles) {
     const nid = normalizeSfId(p.salesforce_contact_id);
     if (!nid) continue;
-    const slug = memMap.get(p.id) ?? '';
+    const slug = memMap.get(p.id);
+    if (!slug) continue; // must have a valid program group
     result.push({
       name: `${p.first_name} ${p.last_name}`,
       contactId: nid,
