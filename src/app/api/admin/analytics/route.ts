@@ -496,9 +496,6 @@ async function loadCurrentYear(db: ReturnType<typeof createAdminClient>): Promis
       .range(from, to)
   );
 
-  // Get unique profile IDs from memberships
-  const profileIds = [...new Set(memberships.map((m) => m.profile_id))];
-
   // Build membership map: profile_id → slug (first valid group)
   const memMap = new Map<string, string>();
   for (const m of memberships) {
@@ -507,21 +504,21 @@ async function loadCurrentYear(db: ReturnType<typeof createAdminClient>): Promis
     if (g) memMap.set(m.profile_id, g.slug);
   }
 
-  // Fetch profiles for these members
+  // Fetch ALL active participant profiles (simpler than .in() with 600+ IDs)
   const profiles = await fetchAllRows<{
     id: string; first_name: string; last_name: string; salesforce_contact_id: string | null; gender: string | null; grade: string | null;
   }>((from, to) =>
     db.from('profiles').select('id, first_name, last_name, salesforce_contact_id, gender, grade')
-      .in('id', profileIds)
+      .eq('is_active', true)
       .range(from, to)
   );
 
   const result: SnapshotParticipant[] = [];
   for (const p of profiles) {
+    const slug = memMap.get(p.id);
+    if (!slug) continue; // must have a valid program group membership
     const nid = normalizeSfId(p.salesforce_contact_id);
     if (!nid) continue;
-    const slug = memMap.get(p.id);
-    if (!slug) continue; // must have a valid program group
     result.push({
       name: `${p.first_name} ${p.last_name}`,
       contactId: nid,
