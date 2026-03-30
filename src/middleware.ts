@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
 
 // Only truly public routes (no /api/ blanket access)
-const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/auth/callback', '/mfa-verify'];
+const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/update-password', '/auth/callback', '/mfa-verify'];
 // API routes that need to be public (auth callback only)
 const PUBLIC_API_ROUTES = ['/api/auth/'];
 const ROLE_PREFIXES = ['/admin', '/madrich', '/participant', '/parent'];

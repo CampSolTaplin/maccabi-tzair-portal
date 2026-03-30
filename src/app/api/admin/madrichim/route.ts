@@ -84,34 +84,33 @@ export async function GET() {
 
     const emailMap = new Map(users.map((u) => [u.id, u.email]));
 
-    // Build membership map
+    // Build membership map (supports multiple groups per user)
     const membershipMap = new Map<
       string,
-      {
-        groupId: string;
-        groupName: string;
-        groupArea: string | null;
-        membershipActive: boolean;
-      }
+      { groupId: string; groupName: string; groupArea: string | null }[]
     >();
 
     for (const m of memberships ?? []) {
+      if (!m.is_active) continue;
       const group = m.groups as unknown as {
         id: string;
         name: string;
         slug: string;
         area: string | null;
       } | null;
-      membershipMap.set(m.profile_id, {
+      const entry = {
         groupId: m.group_id,
         groupName: group?.name ?? 'Unknown',
         groupArea: group?.area ?? null,
-        membershipActive: m.is_active,
-      });
+      };
+      const existing = membershipMap.get(m.profile_id) ?? [];
+      existing.push(entry);
+      membershipMap.set(m.profile_id, existing);
     }
 
     const allUsers = (profiles ?? []).map((p) => {
-      const membership = membershipMap.get(p.id);
+      const groups = membershipMap.get(p.id) ?? [];
+      const first = groups[0] ?? null;
       return {
         id: p.id,
         firstName: p.first_name,
@@ -120,10 +119,13 @@ export async function GET() {
         phone: p.phone,
         role: p.role as 'admin' | 'coordinator' | 'madrich',
         isActive: p.is_active ?? true,
-        groupId: membership?.groupId ?? null,
-        groupName: membership?.groupName ?? null,
-        groupArea: membership?.groupArea ?? null,
-        membershipActive: membership?.membershipActive ?? false,
+        // Single group fields (backward compat for madrichim)
+        groupId: first?.groupId ?? null,
+        groupName: first?.groupName ?? null,
+        groupArea: first?.groupArea ?? null,
+        membershipActive: groups.length > 0,
+        // Multi-group array (for coordinators)
+        groups,
       };
     });
 
@@ -146,8 +148,16 @@ export async function POST(request: NextRequest) {
     const auth = await requireAdmin(supabase);
     if ('error' in auth && auth.error) return auth.error;
 
-    const { email, firstName, lastName, groupId, role } = await request.json();
+    const { email, firstName, lastName, groupId, groupIds, role } = await request.json();
     const userRole = role ?? 'madrich';
+
+    // Coordinators can receive groupIds array; madrichim use single groupId
+    const resolvedGroupIds: string[] =
+      userRole === 'coordinator' && Array.isArray(groupIds) && groupIds.length > 0
+        ? groupIds
+        : groupId
+          ? [groupId]
+          : [];
 
     if (!email || !firstName || !lastName) {
       return NextResponse.json(
@@ -156,10 +166,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // coordinator and madrich require a group
-    if ((userRole === 'coordinator' || userRole === 'madrich') && !groupId) {
+    // coordinator and madrich require at least one group
+    if ((userRole === 'coordinator' || userRole === 'madrich') && resolvedGroupIds.length === 0) {
       return NextResponse.json(
-        { error: 'groupId is required for coordinator and madrich roles' },
+        { error: 'At least one group is required for coordinator and madrich roles' },
         { status: 400 }
       );
     }
@@ -207,17 +217,18 @@ export async function POST(request: NextRequest) {
       throw new Error(`Failed to create profile: ${profileError.message}`);
     }
 
-    // 3. Create group membership (for coordinator and madrich)
-    if ((userRole === 'coordinator' || userRole === 'madrich') && groupId) {
-      const { error: membershipError } = await supabase.from('group_memberships').insert({
+    // 3. Create group memberships (for coordinator and madrich)
+    if ((userRole === 'coordinator' || userRole === 'madrich') && resolvedGroupIds.length > 0) {
+      const rows = resolvedGroupIds.map((gId: string) => ({
         profile_id: userId,
-        group_id: groupId,
+        group_id: gId,
         role: userRole,
         is_active: true,
-      });
+      }));
+      const { error: membershipError } = await supabase.from('group_memberships').insert(rows);
 
       if (membershipError) {
-        throw new Error(`Failed to assign group: ${membershipError.message}`);
+        throw new Error(`Failed to assign group(s): ${membershipError.message}`);
       }
     }
 
@@ -229,7 +240,8 @@ export async function POST(request: NextRequest) {
         firstName,
         lastName,
         role: userRole,
-        groupId: groupId ?? null,
+        groupId: resolvedGroupIds[0] ?? null,
+        groupIds: resolvedGroupIds,
         generatedPassword: password,
       },
     });
@@ -378,6 +390,77 @@ export async function PATCH(request: NextRequest) {
       }
 
       return NextResponse.json({ success: true, action: 'role_changed', newRole: role });
+    }
+
+    if (action === 'add_group') {
+      if (!groupId) {
+        return NextResponse.json({ error: 'groupId is required for add_group' }, { status: 400 });
+      }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', profileId)
+        .single();
+
+      const membershipRole = profile?.role === 'coordinator' ? 'coordinator' : 'madrich';
+
+      const { error: insertError } = await supabase.from('group_memberships').insert({
+        profile_id: profileId,
+        group_id: groupId,
+        role: membershipRole,
+        is_active: true,
+      });
+
+      if (insertError) {
+        throw new Error(`Failed to add group: ${insertError.message}`);
+      }
+
+      return NextResponse.json({ success: true, action: 'group_added' });
+    }
+
+    if (action === 'remove_group') {
+      if (!groupId) {
+        return NextResponse.json({ error: 'groupId is required for remove_group' }, { status: 400 });
+      }
+
+      const { error: updateError } = await supabase
+        .from('group_memberships')
+        .update({ is_active: false })
+        .eq('profile_id', profileId)
+        .eq('group_id', groupId)
+        .in('role', ['madrich', 'coordinator']);
+
+      if (updateError) {
+        throw new Error(`Failed to remove group: ${updateError.message}`);
+      }
+
+      return NextResponse.json({ success: true, action: 'group_removed' });
+    }
+
+    if (action === 'reset_password') {
+      // Get user profile for last name to generate password
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('last_name')
+        .eq('id', profileId)
+        .single();
+
+      if (!profile) {
+        return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      }
+
+      const newPassword = generatePassword(profile.last_name);
+
+      const { error: updateError } = await supabase.auth.admin.updateUserById(profileId, {
+        password: newPassword,
+      });
+
+      if (updateError) {
+        throw new Error(`Failed to reset password: ${updateError.message}`);
+      }
+
+      return NextResponse.json({ success: true, action: 'password_reset', generatedPassword: newPassword });
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

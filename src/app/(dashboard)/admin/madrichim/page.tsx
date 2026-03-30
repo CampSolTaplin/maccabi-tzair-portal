@@ -19,10 +19,18 @@ import {
   Clipboard,
   Check,
   UserCog,
+  KeyRound,
+  Plus,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
 type UserRole = 'admin' | 'coordinator' | 'madrich';
+
+interface UserGroupInfo {
+  groupId: string;
+  groupName: string;
+  groupArea: string | null;
+}
 
 interface UserRecord {
   id: string;
@@ -36,6 +44,7 @@ interface UserRecord {
   groupName: string | null;
   groupArea: string | null;
   membershipActive: boolean;
+  groups: UserGroupInfo[];
 }
 
 interface GroupOption {
@@ -73,11 +82,15 @@ export default function AdminUsersPage() {
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<UserRole>('madrich');
   const [newGroupId, setNewGroupId] = useState('');
+  const [newGroupIds, setNewGroupIds] = useState<string[]>([]);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
   const [copiedPassword, setCopiedPassword] = useState(false);
   const [reassigning, setReassigning] = useState<string | null>(null);
+  const [addingGroupTo, setAddingGroupTo] = useState<string | null>(null);
   const [changingRole, setChangingRole] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
+  const [resetPasswordResult, setResetPasswordResult] = useState<{ userId: string; password: string } | null>(null);
+  const [copiedResetPassword, setCopiedResetPassword] = useState(false);
 
   const { data, isLoading, error } = useQuery<{ users: UserRecord[] }>({
     queryKey: ['admin-users'],
@@ -120,7 +133,7 @@ export default function AdminUsersPage() {
   };
 
   const createMutation = useMutation({
-    mutationFn: async (body: { email: string; firstName: string; lastName: string; role: UserRole; groupId?: string }) => {
+    mutationFn: async (body: { email: string; firstName: string; lastName: string; role: UserRole; groupId?: string; groupIds?: string[] }) => {
       const res = await fetch('/api/admin/madrichim', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -140,6 +153,7 @@ export default function AdminUsersPage() {
       setNewEmail('');
       setNewRole('madrich');
       setNewGroupId('');
+      setNewGroupIds([]);
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
   });
@@ -161,16 +175,61 @@ export default function AdminUsersPage() {
     },
   });
 
+  const resetPasswordMutation = useMutation({
+    mutationFn: async (profileId: string) => {
+      const res = await fetch('/api/admin/madrichim', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId, action: 'reset_password' }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to reset password');
+      }
+      return res.json();
+    },
+    onSuccess: (data, profileId) => {
+      setResetPasswordResult({ userId: profileId, password: data.generatedPassword });
+      setCopiedResetPassword(false);
+    },
+  });
+
+  function handleCopyResetPassword() {
+    if (resetPasswordResult) {
+      navigator.clipboard.writeText(resetPasswordResult.password);
+      setCopiedResetPassword(true);
+      setTimeout(() => setCopiedResetPassword(false), 2000);
+    }
+  }
+
   function handleCreate() {
     if (!newFirst || !newLast || !newEmail) return;
-    if ((newRole === 'coordinator' || newRole === 'madrich') && !newGroupId) return;
-    createMutation.mutate({
-      email: newEmail,
-      firstName: newFirst,
-      lastName: newLast,
-      role: newRole,
-      groupId: newRole === 'admin' ? undefined : newGroupId,
-    });
+    if (newRole === 'coordinator') {
+      if (newGroupIds.length === 0) return;
+      createMutation.mutate({
+        email: newEmail,
+        firstName: newFirst,
+        lastName: newLast,
+        role: newRole,
+        groupIds: newGroupIds,
+      });
+    } else if (newRole === 'madrich') {
+      if (!newGroupId) return;
+      createMutation.mutate({
+        email: newEmail,
+        firstName: newFirst,
+        lastName: newLast,
+        role: newRole,
+        groupId: newGroupId,
+      });
+    } else {
+      createMutation.mutate({
+        email: newEmail,
+        firstName: newFirst,
+        lastName: newLast,
+        role: newRole,
+      });
+    }
   }
 
   function handleCopyPassword() {
@@ -181,8 +240,13 @@ export default function AdminUsersPage() {
     }
   }
 
-  const needsGroup = newRole === 'coordinator' || newRole === 'madrich';
-  const canCreate = newFirst && newLast && newEmail && (newRole === 'admin' || newGroupId);
+  const needsGroup = newRole === 'madrich';
+  const needsMultiGroup = newRole === 'coordinator';
+  const canCreate = newFirst && newLast && newEmail && (
+    newRole === 'admin' ||
+    (newRole === 'madrich' && newGroupId) ||
+    (newRole === 'coordinator' && newGroupIds.length > 0)
+  );
 
   const inputClass = 'rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20';
 
@@ -248,8 +312,59 @@ export default function AdminUsersPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* Group badge (only for coordinator/madrich) */}
-            {(user.role === 'coordinator' || user.role === 'madrich') && user.isActive && (
+            {/* Group badges — coordinator: multi-group; madrich: single */}
+            {user.role === 'coordinator' && user.isActive && (
+              <div className="flex items-center gap-1 flex-wrap">
+                {(user.groups ?? []).map((g) => (
+                  <Badge
+                    key={g.groupId}
+                    className={cn('text-xs cursor-pointer', AREA_COLORS[g.groupArea ?? ''] ?? 'bg-gray-100 text-gray-600')}
+                    onClick={() => {
+                      if (confirm(`Remove ${user.firstName} from ${g.groupName}?`)) {
+                        actionMutation.mutate({ profileId: user.id, action: 'remove_group', groupId: g.groupId });
+                      }
+                    }}
+                    title={`Click to remove from ${g.groupName}`}
+                  >
+                    {g.groupName}
+                    <X className="h-3 w-3 ml-1" />
+                  </Badge>
+                ))}
+                {(user.groups ?? []).length === 0 && (
+                  <Badge className="bg-red-50 text-red-600 text-xs">No groups</Badge>
+                )}
+                {addingGroupTo === user.id ? (
+                  <select
+                    autoFocus
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        actionMutation.mutate({ profileId: user.id, action: 'add_group', groupId: e.target.value });
+                      }
+                      setAddingGroupTo(null);
+                    }}
+                    onBlur={() => setAddingGroupTo(null)}
+                    className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                  >
+                    <option value="">Add group...</option>
+                    {groups
+                      .filter((g) => !(user.groups ?? []).some((ug) => ug.groupId === g.id))
+                      .map((g) => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
+                      ))}
+                  </select>
+                ) : (
+                  <button
+                    onClick={() => setAddingGroupTo(user.id)}
+                    className="p-0.5 rounded-md text-brand-muted hover:text-brand-navy hover:bg-brand-navy/5 transition-colors cursor-pointer"
+                    title="Add group"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
+            {user.role === 'madrich' && user.isActive && (
               <>
                 {reassigning === user.id ? (
                   <select
@@ -291,6 +406,20 @@ export default function AdminUsersPage() {
               </>
             )}
 
+            {user.isActive && (
+              <button
+                onClick={() => {
+                  if (confirm(`Reset password for ${user.firstName} ${user.lastName}?`)) {
+                    resetPasswordMutation.mutate(user.id);
+                  }
+                }}
+                disabled={resetPasswordMutation.isPending}
+                className="p-1.5 rounded-md text-brand-muted hover:text-brand-navy hover:bg-brand-navy/5 transition-colors cursor-pointer disabled:opacity-50"
+                title="Reset password"
+              >
+                <KeyRound className="h-4 w-4" />
+              </button>
+            )}
             {user.isActive ? (
               <button
                 onClick={() => {
@@ -313,6 +442,34 @@ export default function AdminUsersPage() {
               </Button>
             )}
           </div>
+          {/* Reset password result banner */}
+          {resetPasswordResult?.userId === user.id && (
+            <div className="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm flex items-center justify-between">
+              <div>
+                <p className="font-semibold text-amber-800">New temporary password:</p>
+                <code className="font-mono bg-white px-2 py-0.5 rounded text-amber-900">{resetPasswordResult.password}</code>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopyResetPassword}
+                  className="p-1.5 rounded hover:bg-amber-100 transition-colors cursor-pointer"
+                  title="Copy password"
+                >
+                  {copiedResetPassword ? (
+                    <Check className="h-4 w-4 text-amber-600" />
+                  ) : (
+                    <Clipboard className="h-4 w-4 text-amber-600" />
+                  )}
+                </button>
+                <button
+                  onClick={() => setResetPasswordResult(null)}
+                  className="p-1.5 rounded hover:bg-amber-100 transition-colors cursor-pointer"
+                >
+                  <X className="h-4 w-4 text-amber-400" />
+                </button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -419,7 +576,8 @@ export default function AdminUsersPage() {
                 value={newRole}
                 onChange={(e) => {
                   setNewRole(e.target.value as UserRole);
-                  if (e.target.value === 'admin') setNewGroupId('');
+                  setNewGroupId('');
+                  setNewGroupIds([]);
                 }}
                 className={inputClass}
               >
@@ -438,6 +596,39 @@ export default function AdminUsersPage() {
                     <option key={g.id} value={g.id}>{g.name}</option>
                   ))}
                 </select>
+              )}
+              {needsMultiGroup && (
+                <div className="sm:col-span-2 rounded-lg border border-gray-200 p-3">
+                  <p className="text-xs font-medium text-brand-muted mb-2">Assign groups:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {groups.map((g) => {
+                      const selected = newGroupIds.includes(g.id);
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => {
+                            setNewGroupIds(selected
+                              ? newGroupIds.filter((id) => id !== g.id)
+                              : [...newGroupIds, g.id]
+                            );
+                          }}
+                          className={cn(
+                            'px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer border',
+                            selected
+                              ? 'bg-brand-navy text-white border-brand-navy'
+                              : 'bg-white text-brand-muted border-gray-200 hover:border-brand-navy/40'
+                          )}
+                        >
+                          {g.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {newGroupIds.length > 0 && (
+                    <p className="text-xs text-brand-muted mt-2">{newGroupIds.length} group(s) selected</p>
+                  )}
+                </div>
               )}
             </div>
             <div className="flex items-center gap-3">
