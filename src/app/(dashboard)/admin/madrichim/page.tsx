@@ -21,6 +21,7 @@ import {
   UserCog,
   KeyRound,
   Plus,
+  Trash2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -441,6 +442,19 @@ export default function AdminUsersPage() {
                 Reactivate
               </Button>
             )}
+            <button
+              onClick={() => {
+                if (confirm(`PERMANENTLY DELETE ${user.firstName} ${user.lastName}? This cannot be undone.`)) {
+                  if (confirm(`Are you sure? This will remove all data for ${user.firstName} ${user.lastName}.`)) {
+                    actionMutation.mutate({ profileId: user.id, action: 'delete' });
+                  }
+                }
+              }}
+              className="p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+              title="Permanently delete user"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
           </div>
           {/* Reset password result banner */}
           {resetPasswordResult?.userId === user.id && (
