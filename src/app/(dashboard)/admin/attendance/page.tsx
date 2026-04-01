@@ -698,11 +698,11 @@ export default function AdminAttendancePage() {
                     </tr>
                   ))}
                   {/* Totals row */}
-                  <tr className="border-t-2 border-gray-300 bg-gray-50/80 sticky bottom-0 z-10">
-                    <td style={{ minWidth: NAME_W }} className="sticky left-0 z-20 bg-gray-50 py-2 pl-4 pr-2 whitespace-nowrap">
+                  <tr className="border-t-2 border-gray-300 bg-gray-50">
+                    <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-gray-50 py-2 pl-4 pr-2 whitespace-nowrap">
                       <span className="font-bold text-xs text-brand-navy uppercase tracking-wider">Totals</span>
                     </td>
-                    <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-20 bg-gray-50 py-2 px-1 text-center border-r-2 border-gray-200" />
+                    <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-gray-50 py-2 px-1 text-center border-r-2 border-gray-200" />
                     {gridColumns.map((col, colIdx) => {
                       if (col.type === 'event') {
                         return <td key={getColId(col) + '-total'} style={{ width: EVENT_W }} className="py-2 text-center bg-purple-50/20 border-l border-r border-purple-100/50" />;

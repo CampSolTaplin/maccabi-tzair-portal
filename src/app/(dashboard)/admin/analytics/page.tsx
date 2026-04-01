@@ -175,7 +175,17 @@ export default function AnalyticsPage() {
           {!loadingTrend && trendData.length > 0 && (
             <>
               {/* Group toggle chips */}
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <button
+                  onClick={() => {
+                    const allSlugs = new Set(trendGroups.map(g => g.slug));
+                    setVisibleGroups(prev => prev.size === allSlugs.size ? new Set() : allSlugs);
+                  }}
+                  className="px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer border border-gray-300 text-brand-muted hover:bg-gray-100 transition-colors"
+                >
+                  {visibleGroups.size === trendGroups.length ? 'Unselect All' : 'Select All'}
+                </button>
+                <span className="w-px h-5 bg-gray-200" />
                 {trendGroups.map((g) => {
                   const active = visibleGroups.has(g.slug);
                   return (
