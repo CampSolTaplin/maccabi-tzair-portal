@@ -1,9 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
 
-// Only truly public routes (no /api/ blanket access)
-const PUBLIC_ROUTES = ['/login', '/signup', '/reset-password', '/update-password', '/auth/callback', '/mfa-verify'];
-// API routes that need to be public (auth callback only)
 const PUBLIC_API_ROUTES = ['/api/auth/'];
 const ROLE_PREFIXES = ['/admin', '/madrich', '/participant', '/parent'];
 
@@ -18,58 +15,82 @@ function getRoleRoute(role: string): string {
   return ROLE_ROUTES[role] || '/login';
 }
 
+// Routes that should NEVER redirect, even if logged in
+const ALWAYS_ALLOW = ['/reset-password', '/update-password', '/auth/callback', '/signup'];
+
 export async function middleware(request: NextRequest) {
   const { user, supabaseResponse, supabase } = await updateSession(request);
   const path = request.nextUrl.pathname;
 
-  // Allow public routes
-  if (PUBLIC_ROUTES.some(r => path.startsWith(r))) {
-    // These routes should ALWAYS be accessible, even if logged in
-    if (path.startsWith('/reset-password') || path.startsWith('/update-password') || path.startsWith('/auth/callback') || path.startsWith('/signup')) {
-      return supabaseResponse;
-    }
+  // ─── Always-accessible routes (no redirects ever) ───
+  if (ALWAYS_ALLOW.some(r => path.startsWith(r))) {
+    return supabaseResponse;
+  }
 
-    // Only redirect logged-in users from /login and /mfa-verify
-    if (user && (path.startsWith('/login') || path.startsWith('/mfa-verify'))) {
-      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      const needsMfa = aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2';
+  // ─── /login: redirect logged-in users to their dashboard ───
+  if (path.startsWith('/login')) {
+    if (user) {
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
 
-      // Stay on /mfa-verify if MFA is still needed
-      if (path.startsWith('/mfa-verify') && needsMfa) {
-        return supabaseResponse;
-      }
+        if (profile?.role) {
+          const dest = getRoleRoute(profile.role);
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
-      if (profile?.role) {
-        // If admin needs MFA, send to /mfa-verify (not /admin)
-        if (profile.role === 'admin' && needsMfa) {
-          if (!path.startsWith('/mfa-verify')) {
-            return NextResponse.redirect(new URL('/mfa-verify', request.url));
+          // Admin with MFA → check if MFA is verified
+          if (profile.role === 'admin') {
+            const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+            if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
+              return NextResponse.redirect(new URL('/mfa-verify', request.url));
+            }
           }
-          return supabaseResponse;
+
+          return NextResponse.redirect(new URL(dest, request.url));
         }
-        return NextResponse.redirect(new URL(getRoleRoute(profile.role), request.url));
+      } catch {
+        // If anything fails, just show login page
       }
     }
     return supabaseResponse;
   }
 
-  // Allow specific public API routes
+  // ─── /mfa-verify: stay if MFA needed, redirect if not ───
+  if (path.startsWith('/mfa-verify')) {
+    if (user) {
+      try {
+        const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+        if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
+          return supabaseResponse; // Stay — MFA still needed
+        }
+        // MFA done or not required — redirect to dashboard
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+        if (profile?.role) {
+          return NextResponse.redirect(new URL(getRoleRoute(profile.role), request.url));
+        }
+      } catch {
+        // If anything fails, stay on mfa-verify
+      }
+    }
+    return supabaseResponse;
+  }
+
+  // ─── Public API routes ───
   if (PUBLIC_API_ROUTES.some(r => path.startsWith(r))) {
     return supabaseResponse;
   }
 
-  // API routes: require authentication but skip role-based redirect
+  // ─── API routes: require auth ───
   if (path.startsWith('/api/')) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    // Admin API routes require admin role
     if (path.startsWith('/api/admin/')) {
       const { data: profile } = await supabase
         .from('profiles')
@@ -83,7 +104,7 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // Protected routes: must be logged in
+  // ─── Protected routes: must be logged in ───
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
@@ -91,19 +112,15 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // For admin routes, enforce AAL2 if user has MFA enrolled
-  if (path.startsWith('/admin') || path.startsWith('/api/admin')) {
+  // ─── Admin routes: enforce MFA ───
+  if (path.startsWith('/admin')) {
     const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
-      // MFA required but not verified
-      if (path.startsWith('/api/')) {
-        return NextResponse.json({ error: 'MFA verification required' }, { status: 403 });
-      }
       return NextResponse.redirect(new URL('/mfa-verify', request.url));
     }
   }
 
-  // Role-based route protection
+  // ─── Role-based route protection ───
   if (ROLE_PREFIXES.some(prefix => path.startsWith(prefix))) {
     const { data: profile } = await supabase
       .from('profiles')
@@ -112,6 +129,7 @@ export async function middleware(request: NextRequest) {
       .single();
 
     if (!profile) {
+      // No profile found — sign out and send to login
       return NextResponse.redirect(new URL('/login', request.url));
     }
 
@@ -121,7 +139,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Root path -> redirect based on role
+  // ─── Root path → redirect based on role ───
   if (path === '/') {
     const { data: profile } = await supabase
       .from('profiles')
@@ -139,6 +157,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };
