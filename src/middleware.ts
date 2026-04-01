@@ -135,7 +135,10 @@ export async function middleware(request: NextRequest) {
     }
 
     const requiredRole = ROLE_PREFIXES.find(prefix => path.startsWith(prefix))?.slice(1);
-    if (profile.role !== requiredRole && profile.role !== 'admin' && profile.role !== 'coordinator') {
+    // mazkirut can access madrich routes
+    const roleMatches = profile.role === requiredRole ||
+      (profile.role === 'mazkirut' && requiredRole === 'madrich');
+    if (!roleMatches && profile.role !== 'admin' && profile.role !== 'coordinator') {
       return NextResponse.redirect(new URL(getRoleRoute(profile.role), request.url));
     }
   }

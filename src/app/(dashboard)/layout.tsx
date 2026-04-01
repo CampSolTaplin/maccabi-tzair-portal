@@ -68,6 +68,11 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
     { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck },
     { label: 'Group Stats', href: '/madrich/stats', icon: BarChart3, disabled: true },
   ],
+  mazkirut: [
+    { label: 'My Group', href: '/madrich', icon: LayoutDashboard },
+    { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck },
+    { label: 'Group Stats', href: '/madrich/stats', icon: BarChart3, disabled: true },
+  ],
   participant: [
     { label: 'Dashboard', href: '/participant', icon: LayoutDashboard },
     { label: 'My Attendance', href: '/participant/attendance', icon: CalendarCheck, disabled: true },
@@ -94,6 +99,8 @@ function getRoleBadgeColor(role: UserRole): string {
       return 'bg-indigo-500 text-white';
     case 'madrich':
       return 'bg-amber-500 text-white';
+    case 'mazkirut':
+      return 'bg-rose-500 text-white';
     case 'participant':
       return 'bg-emerald-500 text-white';
     case 'parent':

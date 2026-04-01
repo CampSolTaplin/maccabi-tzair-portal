@@ -62,7 +62,7 @@ export async function GET() {
     }
 
     // Get profiles — coordinator only sees madrichim (not admin/coordinator)
-    const rolesToFetch = coordinatorGroupIds ? ['madrich'] : ['admin', 'coordinator', 'madrich'];
+    const rolesToFetch = coordinatorGroupIds ? ['madrich', 'mazkirut'] : ['admin', 'coordinator', 'madrich', 'mazkirut'];
     const { data: profiles, error: profilesError } = await supabase
       .from('profiles')
       .select('id, first_name, last_name, role, phone, is_active')
@@ -83,7 +83,7 @@ export async function GET() {
         .from('group_memberships')
         .select('profile_id')
         .in('group_id', coordinatorGroupIds.length > 0 ? coordinatorGroupIds : ['__none__'])
-        .in('role', ['madrich', 'coordinator'])
+        .in('role', ['madrich', 'mazkirut', 'coordinator'])
         .eq('is_active', true);
       const allowedIds = new Set((groupMadrichim ?? []).map(m => m.profile_id));
       profileIds = profileIds.filter(id => allowedIds.has(id));
@@ -98,7 +98,7 @@ export async function GET() {
         groups (id, name, slug, area)
       `)
       .in('profile_id', profileIds.length > 0 ? profileIds : ['__none__'])
-      .in('role', ['madrich', 'coordinator']);
+      .in('role', ['madrich', 'mazkirut', 'coordinator']);
 
     if (membershipError) {
       throw new Error(`Failed to fetch memberships: ${membershipError.message}`);
@@ -153,7 +153,7 @@ export async function GET() {
         lastName: p.last_name,
         email: emailMap.get(p.id) ?? null,
         phone: p.phone,
-        role: p.role as 'admin' | 'coordinator' | 'madrich',
+        role: p.role as 'admin' | 'coordinator' | 'madrich' | 'mazkirut',
         isActive: p.is_active ?? true,
         // Single group fields (backward compat for madrichim)
         groupId: first?.groupId ?? null,
@@ -203,14 +203,14 @@ export async function POST(request: NextRequest) {
     }
 
     // coordinator and madrich require at least one group
-    if ((userRole === 'coordinator' || userRole === 'madrich') && resolvedGroupIds.length === 0) {
+    if ((userRole === 'coordinator' || userRole === 'madrich' || userRole === 'mazkirut') && resolvedGroupIds.length === 0) {
       return NextResponse.json(
         { error: 'At least one group is required for coordinator and madrich roles' },
         { status: 400 }
       );
     }
 
-    if (!['admin', 'coordinator', 'madrich'].includes(userRole)) {
+    if (!['admin', 'coordinator', 'madrich', 'mazkirut'].includes(userRole)) {
       return NextResponse.json(
         { error: 'role must be admin, coordinator, or madrich' },
         { status: 400 }
@@ -254,7 +254,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Create group memberships (for coordinator and madrich)
-    if ((userRole === 'coordinator' || userRole === 'madrich') && resolvedGroupIds.length > 0) {
+    if ((userRole === 'coordinator' || userRole === 'madrich' || userRole === 'mazkirut') && resolvedGroupIds.length > 0) {
       const rows = resolvedGroupIds.map((gId: string) => ({
         profile_id: userId,
         group_id: gId,
@@ -319,14 +319,14 @@ export async function PATCH(request: NextRequest) {
         .eq('id', profileId)
         .single();
 
-      const membershipRole = profile?.role === 'coordinator' ? 'coordinator' : 'madrich';
+      const membershipRole = profile?.role === 'coordinator' ? 'coordinator' : profile?.role === 'mazkirut' ? 'mazkirut' : 'madrich';
 
       // Deactivate existing memberships for this profile
       await supabase
         .from('group_memberships')
         .update({ is_active: false })
         .eq('profile_id', profileId)
-        .in('role', ['madrich', 'coordinator']);
+        .in('role', ['madrich', 'mazkirut', 'coordinator']);
 
       // Insert new active membership
       const { error: insertError } = await supabase.from('group_memberships').insert({
@@ -359,7 +359,7 @@ export async function PATCH(request: NextRequest) {
         .from('group_memberships')
         .update({ is_active: false })
         .eq('profile_id', profileId)
-        .in('role', ['madrich', 'coordinator']);
+        .in('role', ['madrich', 'mazkirut', 'coordinator']);
 
       return NextResponse.json({ success: true, action: 'deactivated' });
     }
@@ -378,7 +378,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (action === 'change_role') {
-      if (!role || !['admin', 'coordinator', 'madrich'].includes(role)) {
+      if (!role || !['admin', 'coordinator', 'madrich', 'mazkirut'].includes(role)) {
         return NextResponse.json(
           { error: 'Valid role (admin, coordinator, madrich) is required' },
           { status: 400 }
@@ -406,16 +406,16 @@ export async function PATCH(request: NextRequest) {
           .from('group_memberships')
           .update({ is_active: false })
           .eq('profile_id', profileId)
-          .in('role', ['madrich', 'coordinator']);
+          .in('role', ['madrich', 'mazkirut', 'coordinator']);
       }
 
       // If changing from admin to coordinator/madrich and groupId provided, create membership
-      if ((role === 'coordinator' || role === 'madrich') && groupId) {
+      if ((role === 'coordinator' || role === 'madrich' || role === 'mazkirut') && groupId) {
         await supabase
           .from('group_memberships')
           .update({ is_active: false })
           .eq('profile_id', profileId)
-          .in('role', ['madrich', 'coordinator']);
+          .in('role', ['madrich', 'mazkirut', 'coordinator']);
 
         await supabase.from('group_memberships').insert({
           profile_id: profileId,
@@ -439,7 +439,7 @@ export async function PATCH(request: NextRequest) {
         .eq('id', profileId)
         .single();
 
-      const membershipRole = profile?.role === 'coordinator' ? 'coordinator' : 'madrich';
+      const membershipRole = profile?.role === 'coordinator' ? 'coordinator' : profile?.role === 'mazkirut' ? 'mazkirut' : 'madrich';
 
       const { error: insertError } = await supabase.from('group_memberships').insert({
         profile_id: profileId,
@@ -465,7 +465,7 @@ export async function PATCH(request: NextRequest) {
         .update({ is_active: false })
         .eq('profile_id', profileId)
         .eq('group_id', groupId)
-        .in('role', ['madrich', 'coordinator']);
+        .in('role', ['madrich', 'mazkirut', 'coordinator']);
 
       if (updateError) {
         throw new Error(`Failed to remove group: ${updateError.message}`);

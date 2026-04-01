@@ -18,7 +18,7 @@ export async function GET() {
       .from('group_memberships')
       .select('group_id, groups(name)')
       .eq('profile_id', user.id)
-      .eq('role', 'madrich')
+      .in('role', ['madrich', 'mazkirut'])
       .eq('is_active', true)
       .limit(1)
       .single();

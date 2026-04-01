@@ -10,13 +10,14 @@ export const BRAND = {
   danger: '#ef4444',
 } as const;
 
-export const ROLES = ['admin', 'coordinator', 'madrich', 'participant', 'parent'] as const;
+export const ROLES = ['admin', 'coordinator', 'madrich', 'mazkirut', 'participant', 'parent'] as const;
 export type UserRole = typeof ROLES[number];
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'Administrator',
   coordinator: 'Coordinator',
   madrich: 'Madrich/a',
+  mazkirut: 'Mazkirut',
   participant: 'Participant',
   parent: 'Parent',
 };
@@ -25,6 +26,7 @@ export const ROLE_ROUTES: Record<UserRole, string> = {
   admin: '/admin',
   coordinator: '/admin',
   madrich: '/madrich',
+  mazkirut: '/madrich',
   participant: '/participant',
   parent: '/parent',
 };

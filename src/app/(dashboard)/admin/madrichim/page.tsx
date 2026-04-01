@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
-type UserRole = 'admin' | 'coordinator' | 'madrich';
+type UserRole = 'admin' | 'coordinator' | 'madrich' | 'mazkirut';
 
 interface UserGroupInfo {
   groupId: string;
@@ -56,7 +56,7 @@ interface GroupOption {
   area: string;
 }
 
-type FilterTab = 'all' | 'admin' | 'coordinator' | 'madrich';
+type FilterTab = 'all' | 'admin' | 'coordinator' | 'madrich' | 'mazkirut';
 
 const AREA_COLORS: Record<string, string> = {
   katan: 'bg-blue-100 text-blue-700',
@@ -68,6 +68,7 @@ const ROLE_CONFIG: Record<UserRole, { label: string; color: string; icon: typeof
   admin: { label: 'Admin', color: 'bg-red-100 text-red-700', icon: Crown },
   coordinator: { label: 'Coordinator', color: 'bg-indigo-100 text-indigo-700', icon: UserCog },
   madrich: { label: 'Madrich', color: 'bg-emerald-100 text-emerald-700', icon: Shield },
+  mazkirut: { label: 'Mazkirut', color: 'bg-rose-100 text-rose-700', icon: Shield },
 };
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
@@ -75,6 +76,7 @@ const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: 'admin', label: 'Admins' },
   { key: 'coordinator', label: 'Coordinators' },
   { key: 'madrich', label: 'Madrichim' },
+  { key: 'mazkirut', label: 'Mazkirut' },
 ];
 
 export default function AdminUsersPage() {
@@ -123,6 +125,7 @@ export default function AdminUsersPage() {
   const admins = allUsers.filter((u) => u.role === 'admin');
   const coordinators = allUsers.filter((u) => u.role === 'coordinator');
   const madrichim = allUsers.filter((u) => u.role === 'madrich');
+  const mazkirutUsers = allUsers.filter((u) => u.role === 'mazkirut');
 
   const filteredUsers = activeFilter === 'all'
     ? allUsers
@@ -132,10 +135,11 @@ export default function AdminUsersPage() {
   const inactiveFiltered = filteredUsers.filter((u) => !u.isActive);
 
   // Group active users by role for display
-  const activeByRole = {
+  const activeByRole: Record<string, typeof activeFiltered> = {
     admin: activeFiltered.filter((u) => u.role === 'admin'),
     coordinator: activeFiltered.filter((u) => u.role === 'coordinator'),
     madrich: activeFiltered.filter((u) => u.role === 'madrich'),
+    mazkirut: activeFiltered.filter((u) => u.role === 'mazkirut'),
   };
 
   const createMutation = useMutation({
@@ -252,7 +256,7 @@ export default function AdminUsersPage() {
         role: newRole,
         groupIds: newGroupIds,
       });
-    } else if (newRole === 'madrich') {
+    } else if (newRole === 'madrich' || newRole === 'mazkirut') {
       if (!newGroupId) return;
       createMutation.mutate({
         email: newEmail,
@@ -279,11 +283,11 @@ export default function AdminUsersPage() {
     }
   }
 
-  const needsGroup = newRole === 'madrich';
+  const needsGroup = newRole === 'madrich' || newRole === 'mazkirut';
   const needsMultiGroup = newRole === 'coordinator';
   const canCreate = newFirst && newLast && newEmail && (
     newRole === 'admin' ||
-    (newRole === 'madrich' && newGroupId) ||
+    ((newRole === 'madrich' || newRole === 'mazkirut') && newGroupId) ||
     (newRole === 'coordinator' && newGroupIds.length > 0)
   );
 
@@ -385,6 +389,7 @@ export default function AdminUsersPage() {
                     <option value="admin">Admin</option>
                     <option value="coordinator">Coordinator</option>
                     <option value="madrich">Madrich</option>
+                    <option value="mazkirut">Mazkirut</option>
                   </select>
                 ) : (
                   <button
@@ -722,6 +727,7 @@ export default function AdminUsersPage() {
                 <option value="admin">Admin</option>
                 <option value="coordinator">Coordinator</option>
                 <option value="madrich">Madrich</option>
+                <option value="mazkirut">Mazkirut</option>
               </select>
               {needsGroup && (
                 <select
@@ -826,14 +832,14 @@ export default function AdminUsersPage() {
       {/* Active users grouped by role */}
       {!isLoading && activeFiltered.length > 0 && (
         <div className="space-y-6">
-          {(activeFilter === 'all' ? (['admin', 'coordinator', 'madrich'] as UserRole[]) : [activeFilter as UserRole]).map((role) => {
+          {(activeFilter === 'all' ? (['admin', 'coordinator', 'madrich', 'mazkirut'] as UserRole[]) : [activeFilter as UserRole]).map((role) => {
             const usersInRole = activeByRole[role];
             if (!usersInRole || usersInRole.length === 0) return null;
             const config = ROLE_CONFIG[role];
             return (
               <div key={role}>
                 <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">
-                  {role === 'admin' ? 'Administrators' : role === 'coordinator' ? 'Coordinators' : 'Madrichim'}
+                  {role === 'admin' ? 'Administrators' : role === 'coordinator' ? 'Coordinators' : role === 'mazkirut' ? 'Mazkirut' : 'Madrichim'}
                   {' '}({usersInRole.length})
                 </h3>
                 <div className="space-y-2">
