@@ -319,22 +319,22 @@ export default function AdminSessionsPage() {
                   {/* Date row */}
                   <div
                     className={cn(
-                      'flex items-center gap-3 px-4 py-3 rounded-lg bg-white border cursor-pointer transition-all hover:shadow-sm',
-                      allCancelled && 'opacity-50 bg-red-50/30 border-red-100',
-                      past && !allCancelled && 'border-gray-200',
-                      !past && !allCancelled && 'border-brand-navy/10',
+                      'flex items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm',
+                      allCancelled && 'opacity-40 bg-red-50/30 border-red-100',
+                      !allCancelled && past && 'bg-gray-50/60 border-gray-200 opacity-70',
+                      !allCancelled && !past && 'bg-white border-brand-navy/20 shadow-sm',
                     )}
                     onClick={() => toggleDate(dg.date)}
                   >
                     {/* Date badge */}
                     <div className={cn(
                       'text-center w-12 flex-shrink-0 rounded-lg py-1',
-                      allCancelled ? 'bg-red-50' : past ? 'bg-gray-50' : 'bg-brand-navy/5'
+                      allCancelled ? 'bg-red-50' : past ? 'bg-gray-100' : 'bg-brand-navy text-white'
                     )}>
-                      <p className="text-[10px] uppercase font-medium text-brand-muted">{dg.monthLabel}</p>
+                      <p className={cn('text-[10px] uppercase font-medium', past && !allCancelled ? 'text-gray-400' : allCancelled ? 'text-brand-muted' : 'text-white/70')}>{dg.monthLabel}</p>
                       <p className={cn(
                         'text-lg font-bold',
-                        allCancelled ? 'text-red-400' : 'text-brand-dark-text'
+                        allCancelled ? 'text-red-400' : past ? 'text-gray-400' : 'text-white'
                       )}>
                         {dg.dayNum}
                       </p>
@@ -343,7 +343,10 @@ export default function AdminSessionsPage() {
                     {/* Day info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-brand-dark-text">{dg.dayLabel}</span>
+                        <span className={cn('text-sm font-semibold', past && !allCancelled ? 'text-gray-500' : 'text-brand-dark-text')}>{dg.dayLabel}</span>
+                        {!allCancelled && !past && (
+                          <Badge className="bg-blue-100 text-blue-700 text-[10px]">Upcoming</Badge>
+                        )}
                         {allCancelled && (
                           <Badge className="bg-red-100 text-red-600 text-[10px]">All Cancelled</Badge>
                         )}
