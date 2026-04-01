@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const { sessionId, sessionIds, is_cancelled, is_locked } = await request.json();
+    const { sessionId, sessionIds, is_cancelled, is_locked, title } = await request.json();
 
     // Support single sessionId or batch sessionIds
     const ids: string[] = sessionIds ?? (sessionId ? [sessionId] : []);
@@ -110,6 +110,7 @@ export async function PATCH(request: NextRequest) {
     const update: Record<string, unknown> = {};
     if (typeof is_cancelled === 'boolean') update.is_cancelled = is_cancelled;
     if (typeof is_locked === 'boolean') update.is_locked = is_locked;
+    if (typeof title === 'string') update.title = title || null;
 
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
