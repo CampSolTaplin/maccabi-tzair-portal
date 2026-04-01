@@ -10,8 +10,6 @@ import {
   Calendar,
   TrendingUp,
   Cake,
-  AlertTriangle,
-  Clock,
   Loader2,
 } from 'lucide-react';
 
@@ -32,63 +30,6 @@ interface DashboardData {
     age: number;
     groupName: string | null;
   }[];
-  attendanceByGroup: {
-    groupName: string;
-    groupSlug: string;
-    area: string | null;
-    avgPercentage: number;
-    participantCount: number;
-  }[];
-  recentActivity: {
-    groupName: string;
-    sessionDate: string;
-    attendanceCount: number;
-  }[];
-  flaggedByGroup: {
-    groupName: string;
-    groupSlug: string;
-    flaggedCount: number;
-  }[];
-}
-
-function getRelativeTime(dateStr: string): string {
-  const date = new Date(dateStr + 'T00:00:00');
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diffMs = today.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return 'today';
-  if (diffDays === 1) return 'yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
-  if (diffDays < 14) return '1 week ago';
-  return `${Math.floor(diffDays / 7)} weeks ago`;
-}
-
-function getAreaColor(area: string | null): string {
-  switch (area?.toLowerCase()) {
-    case 'katan':
-      return 'bg-blue-500';
-    case 'noar':
-      return 'bg-purple-500';
-    case 'leadership':
-      return 'bg-amber-500';
-    default:
-      return 'bg-brand-navy';
-  }
-}
-
-function getAreaBgLight(area: string | null): string {
-  switch (area?.toLowerCase()) {
-    case 'katan':
-      return 'bg-blue-100';
-    case 'noar':
-      return 'bg-purple-100';
-    case 'leadership':
-      return 'bg-amber-100';
-    default:
-      return 'bg-brand-navy/10';
-  }
 }
 
 export default function AdminDashboardPage() {
@@ -118,7 +59,7 @@ export default function AdminDashboardPage() {
     );
   }
 
-  const { summary, birthdays, attendanceByGroup, recentActivity, flaggedByGroup } = data;
+  const { summary, birthdays } = data;
 
   return (
     <div className="space-y-6">
@@ -281,137 +222,6 @@ export default function AdminDashboardPage() {
         </CardContent>
       </Card>
 
-      {/* ── Attendance by Group ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-brand-navy">Attendance by Group</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {attendanceByGroup.length === 0 ? (
-            <p className="py-4 text-center text-sm text-brand-muted">
-              No attendance data available
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {attendanceByGroup.map((g) => (
-                <div key={g.groupSlug} className="flex items-center gap-4">
-                  <div className="w-36 shrink-0 text-right">
-                    <span className="text-sm font-medium text-brand-dark-text">{g.groupName}</span>
-                  </div>
-                  <div className="relative flex-1">
-                    <div className={cn('h-7 rounded-full', getAreaBgLight(g.area))}>
-                      <div
-                        className={cn(
-                          'h-7 rounded-full transition-all duration-500',
-                          getAreaColor(g.area)
-                        )}
-                        style={{ width: `${Math.max(g.avgPercentage, 2)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div className="w-14 shrink-0 text-right">
-                    <span
-                      className={cn(
-                        'text-sm font-bold',
-                        g.avgPercentage >= 70
-                          ? 'text-emerald-600'
-                          : g.avgPercentage >= 50
-                            ? 'text-amber-600'
-                            : 'text-red-600'
-                      )}
-                    >
-                      {g.avgPercentage}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* ── Recent Activity ── */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-brand-navy">
-              <Clock className="h-5 w-5" />
-              Recent Activity
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {recentActivity.length === 0 ? (
-              <p className="py-4 text-center text-sm text-brand-muted">
-                No recent attendance activity
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {recentActivity.map((a, i) => (
-                  <div
-                    key={`${a.sessionDate}-${a.groupName}-${i}`}
-                    className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="text-sm text-brand-muted">
-                        {new Date(a.sessionDate + 'T00:00:00').toLocaleDateString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                        })}
-                      </div>
-                      <Badge>{a.groupName}</Badge>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-medium text-brand-dark-text">
-                        {a.attendanceCount} recorded
-                      </span>
-                      <span className="text-xs text-brand-muted">
-                        {getRelativeTime(a.sessionDate)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* ── Flagged Participants ── */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-brand-navy">
-              <AlertTriangle className="h-5 w-5 text-red-500" />
-              Flagged Participants
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {flaggedByGroup.length === 0 ? (
-              <p className="py-4 text-center text-sm text-brand-muted">
-                No participants with 2+ consecutive absences
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {flaggedByGroup.map((g) => (
-                  <div
-                    key={g.groupSlug}
-                    className="rounded-lg border-l-4 border-red-400 bg-red-50 px-4 py-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-brand-dark-text">{g.groupName}</span>
-                      <Badge variant="danger">
-                        {g.flaggedCount} flagged
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-xs text-red-600">
-                      {g.flaggedCount} participant{g.flaggedCount !== 1 ? 's' : ''} with 2+
-                      consecutive absences
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }
