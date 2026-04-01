@@ -9,8 +9,11 @@ import { cn } from '@/lib/utils/cn';
 import {
   Upload, FileSpreadsheet, Users, UserPlus, UserMinus, TrendingUp, TrendingDown,
   ChevronDown, ChevronUp, ArrowRight, Loader2, XCircle, BarChart3, RefreshCw,
-  Download, GraduationCap, Baby,
+  Download, GraduationCap, Baby, Activity,
 } from 'lucide-react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
 
 /* ─── Types ─── */
 interface Snapshot { id: string; year_label: string; total_count: number; uploaded_at: string }
@@ -26,6 +29,8 @@ interface TrendResult {
   retentionChain: { from: string; to: string; totalA: number; totalB: number; returned: number; lost: number; graduated: number; new: number; expectedEntry: number; retentionPct: number }[];
   cohorts: { startGroup: string; startGroupSlug: string; currentGroup: string; currentGroupSlug: string; startYear: string; size: number; journey: { year: string; expectedGroup: string; expectedGroupName: string; total: number; inExpected: number; inOther: number; lost: number; graduated: number }[] }[];
 }
+
+interface AttendanceGroup { id: string; name: string; slug: string; area: string; color: string }
 
 /* ─── CSV Download Helper ─── */
 function downloadCSV(filename: string, headers: string[], rows: string[][]) {
@@ -53,6 +58,47 @@ export default function AnalyticsPage() {
   const [showCohorts, setShowCohorts] = useState(false);
   const [lostFilter, setLostFilter] = useState('all');
   const [selectedTrendYears, setSelectedTrendYears] = useState<string[]>([]);
+  const [visibleGroups, setVisibleGroups] = useState<Set<string>>(new Set());
+  const [trendInitialized, setTrendInitialized] = useState(false);
+
+  // Attendance trend data
+  const { data: attendanceTrend, isLoading: loadingTrend } = useQuery<{
+    groups: AttendanceGroup[];
+    data: Record<string, string | number>[];
+  }>({
+    queryKey: ['attendance-trend'],
+    queryFn: async () => {
+      const r = await fetch('/api/admin/analytics/attendance-trend');
+      if (!r.ok) throw new Error('Failed');
+      return r.json();
+    },
+  });
+
+  const trendGroups = attendanceTrend?.groups ?? [];
+  const trendData = attendanceTrend?.data ?? [];
+
+  // Initialize visible groups once data loads (default: all groups with data)
+  useEffect(() => {
+    if (trendGroups.length > 0 && !trendInitialized) {
+      const slugsWithData = new Set<string>();
+      for (const d of trendData) {
+        for (const key of Object.keys(d)) {
+          if (key !== 'date') slugsWithData.add(key);
+        }
+      }
+      setVisibleGroups(slugsWithData);
+      setTrendInitialized(true);
+    }
+  }, [trendGroups, trendData, trendInitialized]);
+
+  function toggleGroup(slug: string) {
+    setVisibleGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  }
 
   const { data: snapshotData, isLoading: loadingSnapshots } = useQuery<{ snapshots: Snapshot[]; currentYear: { year_label: string; total_count: number } }>({
     queryKey: ['analytics-snapshots'],
@@ -110,6 +156,102 @@ export default function AnalyticsPage() {
         <h2 className="text-2xl font-bold text-brand-navy">Year-over-Year Analytics</h2>
         <p className="mt-1 text-sm text-brand-muted">Upload rosters from previous years to compare enrollment, retention, and growth</p>
       </div>
+
+      {/* ─── Attendance Trends ─── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Activity className="h-5 w-5" />
+            Attendance Trends
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {loadingTrend && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-brand-navy" />
+            </div>
+          )}
+
+          {!loadingTrend && trendData.length > 0 && (
+            <>
+              {/* Group toggle chips */}
+              <div className="flex flex-wrap gap-1.5">
+                {trendGroups.map((g) => {
+                  const active = visibleGroups.has(g.slug);
+                  return (
+                    <button
+                      key={g.slug}
+                      onClick={() => toggleGroup(g.slug)}
+                      className={cn(
+                        'px-2.5 py-1 rounded-full text-xs font-medium transition-all cursor-pointer border',
+                        active
+                          ? 'text-white border-transparent'
+                          : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'
+                      )}
+                      style={active ? { backgroundColor: g.color, borderColor: g.color } : undefined}
+                    >
+                      {g.name}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Chart */}
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 11 }}
+                      tickFormatter={(d: string) => {
+                        const dt = new Date(d + 'T12:00:00');
+                        return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      }}
+                      interval="preserveStartEnd"
+                      minTickGap={40}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11 }}
+                      domain={[0, 100]}
+                      tickFormatter={(v: number) => `${v}%`}
+                    />
+                    <Tooltip
+                      labelFormatter={(d) => {
+                        const dt = new Date(String(d) + 'T12:00:00');
+                        return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                      }}
+                      formatter={(value, name) => {
+                        const group = trendGroups.find(g => g.slug === String(name));
+                        return [`${value}%`, group?.name ?? String(name)];
+                      }}
+                      contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb' }}
+                    />
+                    {trendGroups.map((g) => (
+                      visibleGroups.has(g.slug) && (
+                        <Line
+                          key={g.slug}
+                          type="monotone"
+                          dataKey={g.slug}
+                          stroke={g.color}
+                          strokeWidth={2}
+                          dot={false}
+                          activeDot={{ r: 4 }}
+                          connectNulls
+                        />
+                      )
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </>
+          )}
+
+          {!loadingTrend && trendData.length === 0 && (
+            <p className="text-sm text-brand-muted text-center py-8">No attendance data available yet.</p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ─── Upload ─── */}
       <Card>
