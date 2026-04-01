@@ -28,7 +28,7 @@ async function requireAdmin(supabase: ReturnType<typeof createAdminClient>) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || profile.role !== 'admin') {
+  if (!profile || !['admin', 'coordinator'].includes(profile.role)) {
     return { error: NextResponse.json({ error: 'Forbidden: admin only' }, { status: 403 }) };
   }
 
@@ -43,11 +43,30 @@ export async function GET() {
     const auth = await requireAdmin(supabase);
     if ('error' in auth && auth.error) return auth.error;
 
-    // Get all profiles (all roles)
+    // Check if current user is coordinator (to filter results)
+    const { data: myProfile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', auth.user!.id)
+      .single();
+
+    let coordinatorGroupIds: string[] | null = null;
+    if (myProfile?.role === 'coordinator') {
+      const { data: myMemberships } = await supabase
+        .from('group_memberships')
+        .select('group_id')
+        .eq('profile_id', auth.user!.id)
+        .eq('role', 'coordinator')
+        .eq('is_active', true);
+      coordinatorGroupIds = (myMemberships ?? []).map(m => m.group_id);
+    }
+
+    // Get profiles — coordinator only sees madrichim (not admin/coordinator)
+    const rolesToFetch = coordinatorGroupIds ? ['madrich'] : ['admin', 'coordinator', 'madrich'];
     const { data: profiles, error: profilesError } = await supabase
       .from('profiles')
       .select('id, first_name, last_name, role, phone, is_active')
-      .in('role', ['admin', 'coordinator', 'madrich'])
+      .in('role', rolesToFetch)
       .order('role')
       .order('last_name');
 
@@ -56,7 +75,19 @@ export async function GET() {
     }
 
     // Get group memberships for coordinator and madrich users
-    const profileIds = (profiles ?? []).map((p) => p.id);
+    let profileIds = (profiles ?? []).map((p) => p.id);
+
+    // Coordinator: further filter to only madrichim in their groups
+    if (coordinatorGroupIds) {
+      const { data: groupMadrichim } = await supabase
+        .from('group_memberships')
+        .select('profile_id')
+        .in('group_id', coordinatorGroupIds.length > 0 ? coordinatorGroupIds : ['__none__'])
+        .in('role', ['madrich', 'coordinator'])
+        .eq('is_active', true);
+      const allowedIds = new Set((groupMadrichim ?? []).map(m => m.profile_id));
+      profileIds = profileIds.filter(id => allowedIds.has(id));
+    }
     const { data: memberships, error: membershipError } = await supabase
       .from('group_memberships')
       .select(`
@@ -108,7 +139,12 @@ export async function GET() {
       membershipMap.set(m.profile_id, existing);
     }
 
-    const allUsers = (profiles ?? []).map((p) => {
+    // Filter profiles by allowed IDs (for coordinator)
+    const filteredProfiles = coordinatorGroupIds
+      ? (profiles ?? []).filter(p => profileIds.includes(p.id))
+      : (profiles ?? []);
+
+    const allUsers = filteredProfiles.map((p) => {
       const groups = membershipMap.get(p.id) ?? [];
       const first = groups[0] ?? null;
       return {

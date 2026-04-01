@@ -1,49 +1,124 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthContext } from '@/lib/supabase/auth-helpers';
 
 export async function GET() {
   try {
     const supabase = createAdminClient();
+
+    // Auth + coordinator group filtering
+    const auth = await getAuthContext(supabase);
+    if ('error' in auth) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
+    const { groupIds } = auth; // null = admin (all), string[] = coordinator
+
     const today = new Date();
     const todayStr = today.toISOString().split('T')[0];
 
+    // If coordinator, get participant/madrich IDs in their groups
+    let scopedParticipantIds: string[] | null = null;
+    let scopedMadrichIds: string[] | null = null;
+    if (groupIds) {
+      const { data: pMembers } = await supabase
+        .from('group_memberships')
+        .select('profile_id')
+        .in('group_id', groupIds.length > 0 ? groupIds : ['__none__'])
+        .eq('role', 'participant')
+        .eq('is_active', true);
+      scopedParticipantIds = (pMembers ?? []).map(m => m.profile_id);
+
+      const { data: mMembers } = await supabase
+        .from('group_memberships')
+        .select('profile_id')
+        .in('group_id', groupIds.length > 0 ? groupIds : ['__none__'])
+        .eq('role', 'madrich')
+        .eq('is_active', true);
+      scopedMadrichIds = (mMembers ?? []).map(m => m.profile_id);
+    }
+
     // ── 1. Summary Stats ──
 
-    // Total active participants
-    const { count: totalParticipants } = await supabase
-      .from('profiles')
-      .select('id', { count: 'exact', head: true })
-      .eq('is_active', true)
-      .eq('role', 'participant');
+    let totalParticipants: number;
+    let totalMadrichim: number;
+    if (scopedParticipantIds !== null) {
+      totalParticipants = scopedParticipantIds.length;
+      totalMadrichim = scopedMadrichIds?.length ?? 0;
+    } else {
+      const { count: pc } = await supabase
+        .from('profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_active', true)
+        .eq('role', 'participant');
+      totalParticipants = pc ?? 0;
 
-    // Total active madrichim
-    const { count: totalMadrichim } = await supabase
-      .from('profiles')
-      .select('id', { count: 'exact', head: true })
-      .eq('is_active', true)
-      .eq('role', 'madrich');
+      const { count: mc } = await supabase
+        .from('profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_active', true)
+        .eq('role', 'madrich');
+      totalMadrichim = mc ?? 0;
+    }
 
-    // Total active groups
-    const { count: totalGroups } = await supabase
+    // Total active groups (scoped for coordinator)
+    let totalGroupsQuery = supabase
       .from('groups')
       .select('id', { count: 'exact', head: true })
       .eq('is_active', true);
+    if (groupIds) {
+      totalGroupsQuery = totalGroupsQuery.in('id', groupIds.length > 0 ? groupIds : ['__none__']);
+    }
+    const { count: totalGroups } = await totalGroupsQuery;
 
-    // Total non-cancelled sessions
-    const { count: totalSessions } = await supabase
+    // Total non-cancelled sessions (scoped for coordinator)
+    let totalSessionsQuery = supabase
       .from('sessions')
       .select('id', { count: 'exact', head: true })
       .eq('is_cancelled', false);
+    if (groupIds) {
+      totalSessionsQuery = totalSessionsQuery.in('group_id', groupIds.length > 0 ? groupIds : ['__none__']);
+    }
+    const { count: totalSessions } = await totalSessionsQuery;
 
-    // Overall attendance percentage
-    const { count: totalRecords } = await supabase
-      .from('attendance_records')
-      .select('id', { count: 'exact', head: true });
+    // Overall attendance percentage (scoped for coordinator via sessions in their groups)
+    let scopedSessionIds: string[] | null = null;
+    if (groupIds) {
+      const { data: ss } = await supabase
+        .from('sessions')
+        .select('id')
+        .in('group_id', groupIds.length > 0 ? groupIds : ['__none__'])
+        .eq('is_cancelled', false);
+      scopedSessionIds = (ss ?? []).map(s => s.id);
+    }
 
-    const { count: presentRecords } = await supabase
-      .from('attendance_records')
-      .select('id', { count: 'exact', head: true })
-      .in('status', ['present', 'late']);
+    let totalRecords = 0;
+    let presentRecords = 0;
+    if (scopedSessionIds !== null) {
+      for (let i = 0; i < scopedSessionIds.length; i += 50) {
+        const chunk = scopedSessionIds.slice(i, i + 50);
+        const { count: ct } = await supabase
+          .from('attendance_records')
+          .select('id', { count: 'exact', head: true })
+          .in('session_id', chunk);
+        totalRecords += ct ?? 0;
+        const { count: cp } = await supabase
+          .from('attendance_records')
+          .select('id', { count: 'exact', head: true })
+          .in('session_id', chunk)
+          .in('status', ['present', 'late']);
+        presentRecords += cp ?? 0;
+      }
+    } else {
+      const { count: tr } = await supabase
+        .from('attendance_records')
+        .select('id', { count: 'exact', head: true });
+      totalRecords = tr ?? 0;
+      const { count: pr } = await supabase
+        .from('attendance_records')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['present', 'late']);
+      presentRecords = pr ?? 0;
+    }
 
     const overallAttendance =
       totalRecords && totalRecords > 0
@@ -52,11 +127,17 @@ export async function GET() {
 
     // ── 2. Upcoming Birthdays (next 30 days) ──
 
-    const { data: profilesWithBirthdays } = await supabase
+    let birthdayQuery = supabase
       .from('profiles')
       .select('id, first_name, last_name, birthdate, role, is_active')
       .eq('is_active', true)
       .not('birthdate', 'is', null);
+    // Coordinator: only show birthdays of people in their groups
+    if (scopedParticipantIds !== null && scopedMadrichIds !== null) {
+      const allScopedIds = [...scopedParticipantIds, ...scopedMadrichIds];
+      birthdayQuery = birthdayQuery.in('id', allScopedIds.length > 0 ? allScopedIds : ['__none__']);
+    }
+    const { data: profilesWithBirthdays } = await birthdayQuery;
 
     const upcomingBirthdays: {
       firstName: string;
@@ -134,11 +215,15 @@ export async function GET() {
 
     // ── 3. Attendance by Group ──
 
-    const { data: activeGroups } = await supabase
+    let activeGroupsQuery = supabase
       .from('groups')
       .select('id, name, slug, area')
       .eq('is_active', true)
       .order('sort_order');
+    if (groupIds) {
+      activeGroupsQuery = activeGroupsQuery.in('id', groupIds.length > 0 ? groupIds : ['__none__']);
+    }
+    const { data: activeGroups } = await activeGroupsQuery;
 
     const attendanceByGroup: {
       groupName: string;

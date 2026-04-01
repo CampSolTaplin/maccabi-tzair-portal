@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthContext } from '@/lib/supabase/auth-helpers';
 
 interface HoursBreakdown {
   regularSaturdays: { count: number; hoursEach: number; total: number };
@@ -33,15 +34,32 @@ export async function GET(request: NextRequest) {
 
     const supabase = createAdminClient();
 
+    // Auth + coordinator filtering
+    const auth = await getAuthContext(supabase);
+    if ('error' in auth) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
+    const { groupIds: authorizedGroupIds } = auth;
+
     // If no group specified, return list of groups that have community hours (leadership area)
     if (!groupId) {
-      const { data: groups } = await supabase
+      let groupsQuery = supabase
         .from('groups')
         .select('id, name, slug, area')
         .in('area', ['leadership'])
         .order('sort_order');
 
+      if (authorizedGroupIds) {
+        groupsQuery = groupsQuery.in('id', authorizedGroupIds.length > 0 ? authorizedGroupIds : ['__none__']);
+      }
+
+      const { data: groups } = await groupsQuery;
       return NextResponse.json({ groups: groups ?? [] });
+    }
+
+    // Verify coordinator has access to this group
+    if (authorizedGroupIds && !authorizedGroupIds.includes(groupId)) {
+      return NextResponse.json({ error: 'Forbidden: not authorized for this group' }, { status: 403 });
     }
 
     // Get group info

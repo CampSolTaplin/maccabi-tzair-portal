@@ -22,16 +22,34 @@ export async function GET() {
       .eq('id', user.id)
       .single();
 
-    if (!profile || profile.role !== 'admin') {
+    if (!profile || !['admin', 'coordinator'].includes(profile.role)) {
       return NextResponse.json({ error: 'Forbidden: admin only' }, { status: 403 });
     }
 
-    // Fetch all active groups ordered by sort_order
-    const { data: groups, error: groupsError } = await adminClient
+    // Coordinator: get assigned group IDs
+    let coordinatorGroupIds: string[] | null = null;
+    if (profile.role === 'coordinator') {
+      const { data: memberships } = await adminClient
+        .from('group_memberships')
+        .select('group_id')
+        .eq('profile_id', user.id)
+        .eq('role', 'coordinator')
+        .eq('is_active', true);
+      coordinatorGroupIds = (memberships ?? []).map(m => m.group_id);
+    }
+
+    // Fetch groups (filtered for coordinator)
+    let groupsQuery = adminClient
       .from('groups')
       .select('id, name, slug, description, area, sort_order')
       .eq('is_active', true)
       .order('sort_order');
+
+    if (coordinatorGroupIds) {
+      groupsQuery = groupsQuery.in('id', coordinatorGroupIds.length > 0 ? coordinatorGroupIds : ['__none__']);
+    }
+
+    const { data: groups, error: groupsError } = await groupsQuery;
 
     if (groupsError) {
       throw new Error(`Failed to load groups: ${groupsError.message}`);
