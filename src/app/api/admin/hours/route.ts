@@ -98,10 +98,12 @@ export async function GET(request: NextRequest) {
     let eventAttendance: { event_id: string; participant_id: string }[] = [];
 
     if (eventIds.length > 0) {
+      const today = new Date().toISOString().split('T')[0];
       const { data: events } = await supabase
         .from('events')
         .select('id, name, event_date, real_hours')
         .in('id', eventIds)
+        .lte('event_date', today) // Only count events that already happened
         .order('event_date');
       eventsList = events ?? [];
 

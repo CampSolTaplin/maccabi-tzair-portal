@@ -175,9 +175,9 @@ export default function AdminHoursPage() {
   }
 
   function getCoordinatorInfo(slug: string) {
-    if (slug === 'som') return { name: 'Ariel Hutnik', title: 'Coordinator of School of Madrichim', email: 'arih@marjcc.org', ext: '394' };
-    if (slug === 'pre-som') return { name: 'Mercedes Ben Moha', title: 'Coordinator of Pre School of Madrichim', email: 'mbenmoha@marjcc.org', ext: '233' };
-    return { name: 'Ariel Hutnik', title: 'Director of Maccabi Tzair', email: 'arih@marjcc.org', ext: '394' };
+    if (slug === 'som') return { name: 'Ariel Hutnik', title: 'Coordinator of School of Madrichim', email: 'arih@marjcc.org', ext: '394', signature: 'signature-som.png' };
+    if (slug === 'pre-som') return { name: 'Mercedes Ben Moha', title: 'Coordinator of Pre School of Madrichim', email: 'mbenmoha@marjcc.org', ext: '233', signature: null };
+    return { name: 'Ariel Hutnik', title: 'Director of Maccabi Tzair', email: 'arih@marjcc.org', ext: '394', signature: 'signature-ariel.png' };
   }
 
   function buildLetterHTML(data: DetailResponse): string {
@@ -225,6 +225,7 @@ export default function AdminHoursPage() {
   .breakdown strong { font-weight: bold; }
   .closing { margin-top: 0.2in; font-size: 10.5pt; }
   .signature { margin-top: 0.12in; }
+  .sig-image { height: 50px; margin-bottom: 2px; }
   .sig-name { font-weight: bold; font-size: 10.5pt; }
   .sig-title { font-size: 9pt; color: #555; }
   @media print {
@@ -276,6 +277,7 @@ export default function AdminHoursPage() {
 
     <div class="closing">Sincerely,</div>
     <div class="signature">
+      ${coord.signature ? `<img src="${window.location.origin}/csh-assets/${coord.signature}" class="sig-image" alt="Signature">` : ''}
       <div class="sig-name">${coord.name}</div>
       <div class="sig-title">${coord.title}</div>
       <div class="sig-title">Email: ${coord.email}</div>
