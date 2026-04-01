@@ -6,6 +6,7 @@ const ROLE_PREFIXES = ['/admin', '/madrich', '/participant', '/parent'];
 
 const ROLE_ROUTES: Record<string, string> = {
   admin: '/admin',
+  coordinator: '/admin',
   madrich: '/madrich',
   participant: '/participant',
   parent: '/parent',
@@ -97,7 +98,7 @@ export async function middleware(request: NextRequest) {
         .select('role')
         .eq('id', user.id)
         .single();
-      if (profile?.role !== 'admin') {
+      if (profile?.role !== 'admin' && profile?.role !== 'coordinator') {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
@@ -134,7 +135,7 @@ export async function middleware(request: NextRequest) {
     }
 
     const requiredRole = ROLE_PREFIXES.find(prefix => path.startsWith(prefix))?.slice(1);
-    if (profile.role !== requiredRole && profile.role !== 'admin') {
+    if (profile.role !== requiredRole && profile.role !== 'admin' && profile.role !== 'coordinator') {
       return NextResponse.redirect(new URL(getRoleRoute(profile.role), request.url));
     }
   }
