@@ -53,6 +53,16 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
     { label: 'Security', href: '/admin/security', icon: Shield },
     { label: 'Import', href: '/admin/roster-import', icon: FileUp },
   ],
+  coordinator: [
+    { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+    { label: 'Groups', href: '/admin/groups', icon: Layers },
+    { label: 'Attendance', href: '/admin/attendance', icon: ClipboardCheck },
+    { label: 'Sessions', href: '/admin/sessions', icon: Calendar },
+    { label: 'Users', href: '/admin/madrichim', icon: Users },
+    { label: 'Events', href: '/admin/events', icon: PartyPopper },
+    { label: 'Analytics', href: '/admin/analytics', icon: BarChart3 },
+    { label: 'Community Hours', href: '/admin/hours', icon: Clock },
+  ],
   madrich: [
     { label: 'My Group', href: '/madrich', icon: LayoutDashboard },
     { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck },
@@ -80,12 +90,16 @@ function getRoleBadgeColor(role: UserRole): string {
   switch (role) {
     case 'admin':
       return 'bg-brand-coral text-white';
+    case 'coordinator':
+      return 'bg-indigo-500 text-white';
     case 'madrich':
       return 'bg-amber-500 text-white';
     case 'participant':
       return 'bg-emerald-500 text-white';
     case 'parent':
       return 'bg-sky-500 text-white';
+    default:
+      return 'bg-gray-500 text-white';
   }
 }
 
