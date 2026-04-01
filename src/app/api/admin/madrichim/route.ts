@@ -187,9 +187,9 @@ export async function POST(request: NextRequest) {
     const { email, firstName, lastName, groupId, groupIds, role } = await request.json();
     const userRole = role ?? 'madrich';
 
-    // Coordinators can receive groupIds array; madrichim use single groupId
+    // Coordinators and mazkirut can receive groupIds array; madrichim use single groupId
     const resolvedGroupIds: string[] =
-      userRole === 'coordinator' && Array.isArray(groupIds) && groupIds.length > 0
+      (userRole === 'coordinator' || userRole === 'mazkirut') && Array.isArray(groupIds) && groupIds.length > 0
         ? groupIds
         : groupId
           ? [groupId]

@@ -247,7 +247,7 @@ export default function AdminUsersPage() {
 
   function handleCreate() {
     if (!newFirst || !newLast || !newEmail) return;
-    if (newRole === 'coordinator') {
+    if (newRole === 'coordinator' || newRole === 'mazkirut') {
       if (newGroupIds.length === 0) return;
       createMutation.mutate({
         email: newEmail,
@@ -256,7 +256,7 @@ export default function AdminUsersPage() {
         role: newRole,
         groupIds: newGroupIds,
       });
-    } else if (newRole === 'madrich' || newRole === 'mazkirut') {
+    } else if (newRole === 'madrich') {
       if (!newGroupId) return;
       createMutation.mutate({
         email: newEmail,
@@ -283,12 +283,12 @@ export default function AdminUsersPage() {
     }
   }
 
-  const needsGroup = newRole === 'madrich' || newRole === 'mazkirut';
-  const needsMultiGroup = newRole === 'coordinator';
+  const needsGroup = newRole === 'madrich';
+  const needsMultiGroup = newRole === 'coordinator' || newRole === 'mazkirut';
   const canCreate = newFirst && newLast && newEmail && (
     newRole === 'admin' ||
-    ((newRole === 'madrich' || newRole === 'mazkirut') && newGroupId) ||
-    (newRole === 'coordinator' && newGroupIds.length > 0)
+    (newRole === 'madrich' && newGroupId) ||
+    ((newRole === 'coordinator' || newRole === 'mazkirut') && newGroupIds.length > 0)
   );
 
   const inputClass = 'rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20';
@@ -416,7 +416,7 @@ export default function AdminUsersPage() {
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             {/* Group badges — coordinator: multi-group; madrich: single */}
-            {user.role === 'coordinator' && user.isActive && (
+            {(user.role === 'coordinator' || user.role === 'mazkirut') && user.isActive && (
               <div className="flex items-center gap-1 flex-wrap">
                 {(user.groups ?? []).map((g) => (
                   <Badge
@@ -467,7 +467,7 @@ export default function AdminUsersPage() {
                 )}
               </div>
             )}
-            {(user.role === 'madrich' || user.role === 'mazkirut') && user.isActive && (
+            {user.role === 'madrich' && user.isActive && (
               <>
                 {reassigning === user.id ? (
                   <select
