@@ -25,12 +25,18 @@ export async function middleware(request: NextRequest) {
   // Allow public routes
   if (PUBLIC_ROUTES.some(r => path.startsWith(r))) {
     if (user) {
-      // Don't redirect away from /mfa-verify if MFA is still needed
-      if (path.startsWith('/mfa-verify')) {
-        const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-        if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
-          return supabaseResponse; // Stay on MFA page
-        }
+      // Check if user needs MFA verification
+      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      const needsMfa = aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2';
+
+      // Stay on /mfa-verify if MFA is still needed
+      if (path.startsWith('/mfa-verify') && needsMfa) {
+        return supabaseResponse;
+      }
+
+      // Stay on /update-password (user just reset their password)
+      if (path.startsWith('/update-password')) {
+        return supabaseResponse;
       }
 
       const { data: profile } = await supabase
@@ -40,6 +46,13 @@ export async function middleware(request: NextRequest) {
         .single();
 
       if (profile?.role) {
+        // If admin needs MFA, send to /mfa-verify instead of /admin (avoids redirect loop)
+        if (profile.role === 'admin' && needsMfa) {
+          if (!path.startsWith('/mfa-verify')) {
+            return NextResponse.redirect(new URL('/mfa-verify', request.url));
+          }
+          return supabaseResponse;
+        }
         return NextResponse.redirect(new URL(getRoleRoute(profile.role), request.url));
       }
     }
