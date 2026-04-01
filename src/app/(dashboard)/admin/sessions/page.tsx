@@ -406,6 +406,31 @@ export default function AdminSessionsPage() {
                           <RotateCcw className="h-3.5 w-3.5" />
                           Restore All
                         </button>
+                        <span className="w-px h-4 bg-gray-200" />
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const unlocked = dg.sessions.filter(s => !s.isLocked && !s.isCancelled).map(s => s.id);
+                            if (unlocked.length > 0) batchMutation.mutate({ sessionIds: unlocked, field: 'is_locked', value: true });
+                          }}
+                          disabled={dg.sessions.filter(s => !s.isLocked && !s.isCancelled).length === 0 || batchMutation.isPending}
+                          className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-600 hover:bg-amber-50 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <Lock className="h-3.5 w-3.5" />
+                          Lock All
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const locked = dg.sessions.filter(s => s.isLocked && !s.isCancelled).map(s => s.id);
+                            if (locked.length > 0) batchMutation.mutate({ sessionIds: locked, field: 'is_locked', value: false });
+                          }}
+                          disabled={dg.sessions.filter(s => s.isLocked && !s.isCancelled).length === 0 || batchMutation.isPending}
+                          className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <Unlock className="h-3.5 w-3.5" />
+                          Unlock All
+                        </button>
                       </div>
 
                       {dg.sessions.map((session) => (

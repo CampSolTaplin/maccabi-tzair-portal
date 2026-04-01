@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthContext } from '@/lib/supabase/auth-helpers';
 
 export async function GET(request: NextRequest) {
   try {
@@ -9,6 +10,13 @@ export async function GET(request: NextRequest) {
     const to = searchParams.get('to');
 
     const supabase = createAdminClient();
+
+    // Auth + coordinator filtering
+    const auth = await getAuthContext(supabase);
+    if ('error' in auth) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
+    const { groupIds: authorizedGroupIds } = auth;
 
     let query = supabase
       .from('sessions')
@@ -28,6 +36,11 @@ export async function GET(request: NextRequest) {
     }
     if (to) {
       query = query.lte('session_date', to);
+    }
+
+    // Coordinator: only their assigned groups
+    if (authorizedGroupIds) {
+      query = query.in('group_id', authorizedGroupIds.length > 0 ? authorizedGroupIds : ['__none__']);
     }
 
     const { data: sessions, error } = await query;
@@ -75,6 +88,24 @@ export async function PATCH(request: NextRequest) {
     }
 
     const supabase = createAdminClient();
+
+    // Auth + coordinator verification
+    const auth = await getAuthContext(supabase);
+    if ('error' in auth) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
+
+    // Coordinator: verify all sessions belong to their groups
+    if (auth.groupIds) {
+      const { data: sessionData } = await supabase
+        .from('sessions')
+        .select('id, group_id')
+        .in('id', ids);
+      const unauthorized = (sessionData ?? []).filter(s => !auth.groupIds!.includes(s.group_id));
+      if (unauthorized.length > 0) {
+        return NextResponse.json({ error: 'Forbidden: not authorized for these sessions' }, { status: 403 });
+      }
+    }
 
     const update: Record<string, unknown> = {};
     if (typeof is_cancelled === 'boolean') update.is_cancelled = is_cancelled;
