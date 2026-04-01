@@ -318,6 +318,27 @@ export default function AdminAttendancePage() {
     }
   }
 
+  // Compute per-session totals (present+late count and percentage)
+  const sessionTotals = useMemo(() => {
+    const totalActive = activeParticipants.length;
+    const totals: Record<string, { present: number; total: number; pct: number }> = {};
+
+    for (const col of gridColumns) {
+      if (col.type !== 'session') continue;
+      const s = col.data as SessionHeader;
+      if (s.isCancelled || s.isFuture || !s.hasAttendance) continue;
+
+      let present = 0;
+      for (const p of activeParticipants) {
+        const status = p.records[s.id];
+        if (status === 'present' || status === 'late') present++;
+      }
+      const pct = totalActive > 0 ? Math.round((present / totalActive) * 100) : 0;
+      totals[s.id] = { present, total: totalActive, pct };
+    }
+    return totals;
+  }, [gridColumns, activeParticipants]);
+
   const CELL_W = 32; // px per session column
   const EVENT_W = 32; // px per event column (same as sessions, name shown on hover)
   const NAME_W = 220;
@@ -676,6 +697,51 @@ export default function AdminAttendancePage() {
                       ))}
                     </tr>
                   ))}
+                  {/* Totals row */}
+                  <tr className="border-t-2 border-gray-300 bg-gray-50/80 sticky bottom-0 z-10">
+                    <td style={{ minWidth: NAME_W }} className="sticky left-0 z-20 bg-gray-50 py-2 pl-4 pr-2 whitespace-nowrap">
+                      <span className="font-bold text-xs text-brand-navy uppercase tracking-wider">Totals</span>
+                    </td>
+                    <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-20 bg-gray-50 py-2 px-1 text-center border-r-2 border-gray-200" />
+                    {gridColumns.map((col, colIdx) => {
+                      if (col.type === 'event') {
+                        return <td key={getColId(col) + '-total'} style={{ width: EVENT_W }} className="py-2 text-center bg-purple-50/20 border-l border-r border-purple-100/50" />;
+                      }
+                      const s = col.data as SessionHeader;
+                      const stats = sessionTotals[s.id];
+                      if (!stats) {
+                        return (
+                          <td key={getColId(col) + '-total'} style={{ width: CELL_W }} className={cn(
+                            'py-2 text-center',
+                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                            s.isCancelled && 'bg-red-50/30',
+                            s.isFuture && 'bg-blue-50/30',
+                          )} />
+                        );
+                      }
+                      return (
+                        <td
+                          key={getColId(col) + '-total'}
+                          style={{ width: CELL_W }}
+                          className={cn(
+                            'py-1 text-center',
+                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                          )}
+                          title={`${stats.present}/${stats.total} (${stats.pct}%)`}
+                        >
+                          <div className="flex flex-col items-center leading-tight">
+                            <span className="text-[9px] font-bold text-brand-dark-text">{stats.present}</span>
+                            <span className={cn(
+                              'text-[8px] font-semibold',
+                              getPercentageColor(stats.pct)
+                            )}>
+                              {stats.pct}%
+                            </span>
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
                 </tbody>
               </table>
             </div>
