@@ -467,7 +467,7 @@ export default function AdminUsersPage() {
                 )}
               </div>
             )}
-            {user.role === 'madrich' && user.isActive && (
+            {(user.role === 'madrich' || user.role === 'mazkirut') && user.isActive && (
               <>
                 {reassigning === user.id ? (
                   <select
