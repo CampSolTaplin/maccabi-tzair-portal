@@ -474,6 +474,96 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: true, action: 'group_removed' });
     }
 
+    if (action === 'update_profile') {
+      const { firstName, lastName, phone, email } = await request.json();
+
+      // Update profile fields
+      const profileUpdate: Record<string, unknown> = {};
+      if (firstName) profileUpdate.first_name = firstName;
+      if (lastName) profileUpdate.last_name = lastName;
+      if (typeof phone === 'string') profileUpdate.phone = phone || null;
+
+      if (Object.keys(profileUpdate).length > 0) {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update(profileUpdate)
+          .eq('id', profileId);
+
+        if (profileError) {
+          throw new Error(`Failed to update profile: ${profileError.message}`);
+        }
+      }
+
+      // Update auth user metadata (name)
+      if (firstName || lastName) {
+        const metaUpdate: Record<string, string> = {};
+        if (firstName) metaUpdate.first_name = firstName;
+        if (lastName) metaUpdate.last_name = lastName;
+        await supabase.auth.admin.updateUserById(profileId, {
+          user_metadata: metaUpdate,
+        }).catch(() => {
+          // Auth user might not exist (imported profile without email)
+        });
+      }
+
+      // Handle email: if profile has no auth user, create one
+      if (email) {
+        // Check if auth user exists
+        const { data: authUser } = await supabase.auth.admin.getUserById(profileId);
+
+        if (authUser?.user) {
+          // Auth user exists — update email
+          const { error: emailError } = await supabase.auth.admin.updateUserById(profileId, {
+            email,
+            email_confirm: true,
+          });
+          if (emailError) {
+            throw new Error(`Failed to update email: ${emailError.message}`);
+          }
+        } else {
+          // No auth user — create one with this email
+          const currentProfile = await supabase
+            .from('profiles')
+            .select('last_name, role')
+            .eq('id', profileId)
+            .single();
+
+          const password = generatePassword(currentProfile.data?.last_name ?? 'user');
+
+          const { error: createError } = await supabase.auth.admin.createUser({
+            id: profileId,
+            email,
+            password,
+            email_confirm: true,
+            user_metadata: {
+              role: currentProfile.data?.role ?? 'madrich',
+              first_name: firstName ?? undefined,
+              last_name: lastName ?? undefined,
+            },
+          });
+
+          if (createError) {
+            throw new Error(`Failed to create auth account: ${createError.message}`);
+          }
+
+          // Clear needs_email flag
+          await supabase
+            .from('profiles')
+            .update({ needs_email: false })
+            .eq('id', profileId);
+
+          return NextResponse.json({
+            success: true,
+            action: 'profile_updated',
+            authCreated: true,
+            generatedPassword: password,
+          });
+        }
+      }
+
+      return NextResponse.json({ success: true, action: 'profile_updated' });
+    }
+
     if (action === 'delete') {
       // Delete group memberships first
       await supabase

@@ -22,6 +22,8 @@ import {
   KeyRound,
   Plus,
   Trash2,
+  Pencil,
+  Save,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -88,6 +90,9 @@ export default function AdminUsersPage() {
   const [copiedPassword, setCopiedPassword] = useState(false);
   const [reassigning, setReassigning] = useState<string | null>(null);
   const [addingGroupTo, setAddingGroupTo] = useState<string | null>(null);
+  const [editingUser, setEditingUser] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ firstName: string; lastName: string; email: string; phone: string }>({ firstName: '', lastName: '', email: '', phone: '' });
+  const [editResult, setEditResult] = useState<{ userId: string; password?: string } | null>(null);
   const [changingRole, setChangingRole] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const [resetPasswordResult, setResetPasswordResult] = useState<{ userId: string; password: string } | null>(null);
@@ -195,6 +200,39 @@ export default function AdminUsersPage() {
     },
   });
 
+  const editMutation = useMutation({
+    mutationFn: async ({ profileId, ...fields }: { profileId: string; firstName: string; lastName: string; email: string; phone: string }) => {
+      const res = await fetch('/api/admin/madrichim', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId, action: 'update_profile', ...fields }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to update');
+      }
+      return res.json();
+    },
+    onSuccess: (data, vars) => {
+      setEditingUser(null);
+      if (data.authCreated && data.generatedPassword) {
+        setEditResult({ userId: vars.profileId, password: data.generatedPassword });
+      }
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+  });
+
+  function startEditing(user: UserRecord) {
+    setEditingUser(user.id);
+    setEditForm({
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email ?? '',
+      phone: user.phone ?? '',
+    });
+    setEditResult(null);
+  }
+
   function handleCopyResetPassword() {
     if (resetPasswordResult) {
       navigator.clipboard.writeText(resetPasswordResult.password);
@@ -254,6 +292,65 @@ export default function AdminUsersPage() {
   function renderUserCard(user: UserRecord) {
     const config = ROLE_CONFIG[user.role];
     const RoleIcon = config.icon;
+    const isEditing = editingUser === user.id;
+
+    if (isEditing) {
+      return (
+        <Card key={user.id} className="border-brand-navy/30 shadow-sm">
+          <CardContent className="py-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-brand-navy">Edit User</h4>
+              <button onClick={() => setEditingUser(null)} className="text-brand-muted hover:text-brand-dark-text cursor-pointer">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                placeholder="First name"
+                value={editForm.firstName}
+                onChange={(e) => setEditForm(f => ({ ...f, firstName: e.target.value }))}
+                className={inputClass}
+              />
+              <input
+                placeholder="Last name"
+                value={editForm.lastName}
+                onChange={(e) => setEditForm(f => ({ ...f, lastName: e.target.value }))}
+                className={inputClass}
+              />
+              <input
+                placeholder="Email"
+                type="email"
+                value={editForm.email}
+                onChange={(e) => setEditForm(f => ({ ...f, email: e.target.value }))}
+                className={inputClass}
+              />
+              <input
+                placeholder="Phone"
+                value={editForm.phone}
+                onChange={(e) => setEditForm(f => ({ ...f, phone: e.target.value }))}
+                className={inputClass}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                disabled={editMutation.isPending || !editForm.firstName || !editForm.lastName}
+                onClick={() => editMutation.mutate({ profileId: user.id, ...editForm })}
+              >
+                {editMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save
+              </Button>
+              {editMutation.error && (
+                <p className="text-xs text-red-600">{editMutation.error.message}</p>
+              )}
+              {!user.email && editForm.email && (
+                <p className="text-xs text-amber-600">Adding email will create a login account with a temporary password.</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
 
     return (
       <Card key={user.id} className={cn('hover:shadow-sm transition-shadow', !user.isActive && 'opacity-60')}>
@@ -409,6 +506,15 @@ export default function AdminUsersPage() {
 
             {user.isActive && (
               <button
+                onClick={() => startEditing(user)}
+                className="p-1.5 rounded-md text-brand-muted hover:text-brand-navy hover:bg-brand-navy/5 transition-colors cursor-pointer"
+                title="Edit user"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+            )}
+            {user.isActive && (
+              <button
                 onClick={() => {
                   if (confirm(`Reset password for ${user.firstName} ${user.lastName}?`)) {
                     resetPasswordMutation.mutate(user.id);
@@ -482,6 +588,24 @@ export default function AdminUsersPage() {
                   <X className="h-4 w-4 text-amber-400" />
                 </button>
               </div>
+            </div>
+          )}
+          {/* Edit result banner (shows password when auth account was created) */}
+          {editResult?.userId === user.id && editResult.password && (
+            <div className="mt-2 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-sm flex items-center justify-between">
+              <div>
+                <p className="font-semibold text-emerald-800">Account created! Temporary password:</p>
+                <code className="font-mono bg-white px-2 py-0.5 rounded text-emerald-900">{editResult.password}</code>
+              </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(editResult.password!);
+                }}
+                className="p-1.5 rounded hover:bg-emerald-100 transition-colors cursor-pointer"
+                title="Copy password"
+              >
+                <Clipboard className="h-4 w-4 text-emerald-600" />
+              </button>
             </div>
           )}
         </CardContent>
