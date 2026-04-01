@@ -24,18 +24,18 @@ export async function middleware(request: NextRequest) {
 
   // Allow public routes
   if (PUBLIC_ROUTES.some(r => path.startsWith(r))) {
-    if (user) {
-      // Check if user needs MFA verification
+    // These routes should ALWAYS be accessible, even if logged in
+    if (path.startsWith('/reset-password') || path.startsWith('/update-password') || path.startsWith('/auth/callback') || path.startsWith('/signup')) {
+      return supabaseResponse;
+    }
+
+    // Only redirect logged-in users from /login and /mfa-verify
+    if (user && (path.startsWith('/login') || path.startsWith('/mfa-verify'))) {
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
       const needsMfa = aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2';
 
       // Stay on /mfa-verify if MFA is still needed
       if (path.startsWith('/mfa-verify') && needsMfa) {
-        return supabaseResponse;
-      }
-
-      // Stay on /update-password (user just reset their password)
-      if (path.startsWith('/update-password')) {
         return supabaseResponse;
       }
 
@@ -46,7 +46,7 @@ export async function middleware(request: NextRequest) {
         .single();
 
       if (profile?.role) {
-        // If admin needs MFA, send to /mfa-verify instead of /admin (avoids redirect loop)
+        // If admin needs MFA, send to /mfa-verify (not /admin)
         if (profile.role === 'admin' && needsMfa) {
           if (!path.startsWith('/mfa-verify')) {
             return NextResponse.redirect(new URL('/mfa-verify', request.url));
