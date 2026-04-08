@@ -17,10 +17,12 @@ export default function ResetPasswordPage() {
 
     try {
       const supabase = createClient();
+      const siteUrl =
+        process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(
         email,
         {
-          redirectTo: `${window.location.origin}/auth/callback?next=/update-password`,
+          redirectTo: `${siteUrl}/auth/callback?next=/update-password`,
         }
       );
 
