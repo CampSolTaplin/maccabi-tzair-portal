@@ -1,8 +1,25 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
+import {
+  MFA_TRUST_COOKIE_NAME,
+  verifyTrustToken,
+} from '@/lib/auth/mfa-trust';
 
 const PUBLIC_API_ROUTES = ['/api/auth/'];
 const ROLE_PREFIXES = ['/admin', '/madrich', '/participant', '/parent'];
+
+async function isMfaTrusted(
+  request: NextRequest,
+  userId: string
+): Promise<boolean> {
+  const cookie = request.cookies.get(MFA_TRUST_COOKIE_NAME)?.value;
+  if (!cookie) return false;
+  try {
+    return await verifyTrustToken(cookie, userId);
+  } catch {
+    return false;
+  }
+}
 
 const ROLE_ROUTES: Record<string, string> = {
   admin: '/admin',
@@ -41,11 +58,14 @@ export async function middleware(request: NextRequest) {
         if (profile?.role) {
           const dest = getRoleRoute(profile.role);
 
-          // Admin with MFA → check if MFA is verified
+          // Admin with MFA → check if MFA is verified (or device is trusted)
           if (profile.role === 'admin') {
             const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
             if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
-              return NextResponse.redirect(new URL('/mfa-verify', request.url));
+              const trusted = await isMfaTrusted(request, user.id);
+              if (!trusted) {
+                return NextResponse.redirect(new URL('/mfa-verify', request.url));
+              }
             }
           }
 
@@ -64,7 +84,11 @@ export async function middleware(request: NextRequest) {
       try {
         const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
         if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
-          return supabaseResponse; // Stay — MFA still needed
+          const trusted = await isMfaTrusted(request, user.id);
+          if (!trusted) {
+            return supabaseResponse; // Stay — MFA still needed
+          }
+          // Trusted device → fall through and redirect to dashboard
         }
         // MFA done or not required — redirect to dashboard
         const { data: profile } = await supabase
@@ -113,11 +137,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // ─── Admin routes: enforce MFA ───
+  // ─── Admin routes: enforce MFA (unless device is trusted) ───
   if (path.startsWith('/admin')) {
     const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
-      return NextResponse.redirect(new URL('/mfa-verify', request.url));
+      const trusted = await isMfaTrusted(request, user.id);
+      if (!trusted) {
+        return NextResponse.redirect(new URL('/mfa-verify', request.url));
+      }
     }
   }
 

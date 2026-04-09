@@ -11,6 +11,7 @@ export default function MFAVerifyPage() {
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
   const [otpKey, setOtpKey] = useState(0); // used to reset OTPInput
+  const [rememberDevice, setRememberDevice] = useState(true);
 
   const supabase = createClient();
 
@@ -76,6 +77,17 @@ export default function MFAVerifyPage() {
         // Create a new challenge for the next attempt
         await createChallenge(factorId);
         return;
+      }
+
+      // Optionally persist a 30-day "trust this device" cookie so the
+      // user doesn't have to re-verify MFA on future logins from here.
+      if (rememberDevice) {
+        try {
+          await fetch('/api/auth/mfa-trust', { method: 'POST' });
+        } catch {
+          // Non-fatal: the user is still authenticated, just won't be
+          // remembered on the next login.
+        }
       }
 
       // Success - full page reload to ensure cookies are set
@@ -174,7 +186,7 @@ export default function MFAVerifyPage() {
             </div>
           )}
 
-          <div className="mb-8">
+          <div className="mb-6">
             <OTPInput
               key={otpKey}
               onComplete={handleVerify}
@@ -182,6 +194,18 @@ export default function MFAVerifyPage() {
               error={!!error}
             />
           </div>
+
+          {/* Remember device */}
+          <label className="mb-6 flex items-center justify-center gap-2 text-sm text-brand-muted cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={rememberDevice}
+              onChange={(e) => setRememberDevice(e.target.checked)}
+              disabled={loading}
+              className="h-4 w-4 rounded border-gray-300 text-brand-navy focus:ring-brand-navy/30 cursor-pointer"
+            />
+            Trust this device for 30 days
+          </label>
 
           {/* Verify button (in case auto-submit doesn't trigger) */}
           <button

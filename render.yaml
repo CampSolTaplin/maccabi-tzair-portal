@@ -11,3 +11,9 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      # HMAC secret used to sign the "trust this device" cookie that
+      # lets users skip MFA on subsequent logins for 30 days. Must be
+      # at least 32 random characters. Generate with:
+      #   openssl rand -base64 48
+      - key: MFA_TRUST_SECRET
+        sync: false
