@@ -251,32 +251,23 @@ export async function POST(request: NextRequest) {
 
     const password = generatePassword(lastName);
 
+    // We don't use Supabase's Phone provider (it requires Twilio), so every
+    // user is created with an email — either the real one if provided, or a
+    // synthetic internal one when the user only has a phone. The phone is
+    // stored in profiles.phone and resolved to this email at login time.
+    const authEmail = cleanEmail ?? `phone-${Math.random().toString(36).slice(2, 12)}@mtz.local`;
+
     // 1. Create auth user
-    const createPayload: {
-      email?: string;
-      phone?: string;
-      password: string;
-      email_confirm?: boolean;
-      phone_confirm?: boolean;
-      user_metadata: { role: string; first_name: string; last_name: string };
-    } = {
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email: authEmail,
       password,
+      email_confirm: true,
       user_metadata: {
         role: userRole,
         first_name: firstName,
         last_name: lastName,
       },
-    };
-    if (cleanEmail) {
-      createPayload.email = cleanEmail;
-      createPayload.email_confirm = true;
-    }
-    if (normalizedPhone) {
-      createPayload.phone = normalizedPhone;
-      createPayload.phone_confirm = true;
-    }
-
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser(createPayload);
+    });
 
     if (authError) {
       throw new Error(`Failed to create auth user: ${authError.message}`);
@@ -524,15 +515,12 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (action === 'update_profile') {
-      // If a phone was provided, normalize and validate it before touching
-      // anything. We allow phone login only for madrich and mazkirut.
+      // Normalize and validate the phone if provided. Phone login is only
+      // allowed for madrich and mazkirut.
       let phoneForProfile: string | null | undefined;
-      let phoneForAuth: string | null | undefined;
       if (typeof phone === 'string') {
         if (phone.trim().length === 0) {
-          // Explicit clear
-          phoneForProfile = null;
-          phoneForAuth = null;
+          phoneForProfile = null; // explicit clear
         } else {
           const { data: targetProfile } = await supabase
             .from('profiles')
@@ -553,7 +541,6 @@ export async function PATCH(request: NextRequest) {
             );
           }
           phoneForProfile = normalized;
-          phoneForAuth = normalized;
         }
       }
 
@@ -574,30 +561,25 @@ export async function PATCH(request: NextRequest) {
         }
       }
 
-      // Sync phone to auth.users so the user can log in with it.
-      if (phoneForAuth !== undefined) {
+      // If a phone was set on a profile that has no auth user yet (imported
+      // without an email), create one with a synthetic internal email so the
+      // user can log in. If the same request also provides a real email, the
+      // email block below will handle it instead.
+      if (phoneForProfile && !email) {
         const { data: existingAuth } = await supabase.auth.admin.getUserById(profileId);
-        if (existingAuth?.user) {
-          const { error: phoneSyncError } = await supabase.auth.admin.updateUserById(profileId, {
-            phone: phoneForAuth ?? '',
-            phone_confirm: true,
-          });
-          if (phoneSyncError) {
-            throw new Error(`Failed to sync phone to auth: ${phoneSyncError.message}`);
-          }
-        } else if (phoneForAuth) {
-          // No auth user yet — create one with phone-only login.
+        if (!existingAuth?.user) {
           const currentProfile = await supabase
             .from('profiles')
             .select('last_name, role, first_name')
             .eq('id', profileId)
             .single();
           const generated = generatePassword(currentProfile.data?.last_name ?? 'user');
+          const syntheticEmail = `phone-${Math.random().toString(36).slice(2, 12)}@mtz.local`;
           const { error: createError } = await supabase.auth.admin.createUser({
             id: profileId,
-            phone: phoneForAuth,
+            email: syntheticEmail,
             password: generated,
-            phone_confirm: true,
+            email_confirm: true,
             user_metadata: {
               role: currentProfile.data?.role ?? 'madrich',
               first_name: currentProfile.data?.first_name ?? '',

@@ -38,8 +38,21 @@ export default function LoginPage() {
           );
           return;
         }
+        // Resolve the phone to the email Supabase Auth uses for this user.
+        // We don't use Supabase's Phone provider (it requires Twilio), so
+        // each phone-login user has a synthetic internal email under the hood.
+        const resolveRes = await fetch('/api/auth/resolve-phone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone }),
+        });
+        if (!resolveRes.ok) {
+          setError('Invalid credentials. Please try again.');
+          return;
+        }
+        const { email: resolvedEmail } = await resolveRes.json();
         ({ error: authError } = await supabase.auth.signInWithPassword({
-          phone,
+          email: resolvedEmail,
           password,
         }));
       } else {
