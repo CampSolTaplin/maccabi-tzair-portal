@@ -17,7 +17,7 @@ function getRoleRoute(role: string): string {
 }
 
 // Routes that should NEVER redirect, even if logged in
-const ALWAYS_ALLOW = ['/reset-password', '/update-password', '/auth/callback', '/signup'];
+const ALWAYS_ALLOW = ['/reset-password', '/auth/callback', '/signup'];
 
 export async function middleware(request: NextRequest) {
   const { user, supabaseResponse, supabase } = await updateSession(request);
