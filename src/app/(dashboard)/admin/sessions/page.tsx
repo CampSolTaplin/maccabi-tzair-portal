@@ -83,6 +83,8 @@ export default function AdminSessionsPage() {
 
   const sessions = data?.sessions ?? [];
 
+  const isPast = (date: string) => new Date(date + 'T23:59:59') < new Date();
+
   const toggleMutation = useMutation({
     mutationFn: async ({ sessionId, field, value, title }: { sessionId: string; field: string; value: boolean; title?: string }) => {
       const body: Record<string, unknown> = { sessionId, [field]: value };
@@ -208,12 +210,6 @@ export default function AdminSessionsPage() {
       setGenerating(false);
     }
   }
-
-  const totalActive = sessions.filter((s) => !s.isCancelled).length;
-  const totalCancelled = sessions.filter((s) => s.isCancelled).length;
-  const uniqueDates = new Set(sessions.map((s) => s.sessionDate)).size;
-
-  const isPast = (date: string) => new Date(date + 'T23:59:59') < new Date();
 
   function renderExpandedDate(dg: DateGroup) {
     return (
