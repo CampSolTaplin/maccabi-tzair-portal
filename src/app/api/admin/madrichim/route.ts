@@ -346,7 +346,8 @@ export async function PATCH(request: NextRequest) {
     const auth = await requireAdmin(supabase);
     if ('error' in auth && auth.error) return auth.error;
 
-    const { profileId, action, groupId, role } = await request.json();
+    const body = await request.json();
+    const { profileId, action, groupId, role, firstName, lastName, phone, email } = body;
 
     if (!profileId || !action) {
       return NextResponse.json(
@@ -523,8 +524,6 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (action === 'update_profile') {
-      const { firstName, lastName, phone, email } = await request.json();
-
       // If a phone was provided, normalize and validate it before touching
       // anything. We allow phone login only for madrich and mazkirut.
       let phoneForProfile: string | null | undefined;
