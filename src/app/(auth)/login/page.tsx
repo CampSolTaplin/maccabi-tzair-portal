@@ -1,13 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import {
+  looksLikeEmail,
+  looksLikePhone,
+  normalizeUSPhone,
+} from '@/lib/auth/phone';
 
 export default function LoginPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,14 +22,34 @@ export default function LoginPage() {
 
     try {
       const supabase = createClient();
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const trimmed = identifier.trim();
+
+      let authError;
+      if (looksLikeEmail(trimmed)) {
+        ({ error: authError } = await supabase.auth.signInWithPassword({
+          email: trimmed,
+          password,
+        }));
+      } else if (looksLikePhone(trimmed)) {
+        const phone = normalizeUSPhone(trimmed);
+        if (!phone) {
+          setError(
+            'Please enter a valid US phone number (10 digits) or an email address.'
+          );
+          return;
+        }
+        ({ error: authError } = await supabase.auth.signInWithPassword({
+          phone,
+          password,
+        }));
+      } else {
+        setError('Please enter your email or phone number.');
+        return;
+      }
 
       if (authError) {
         if (authError.message.includes('Invalid login credentials')) {
-          setError('Invalid email or password. Please try again.');
+          setError('Invalid credentials. Please try again.');
         } else {
           setError(authError.message);
         }
@@ -146,22 +168,23 @@ export default function LoginPage() {
             )}
 
             <form onSubmit={handleSubmit} className="space-y-5">
-              {/* Email */}
+              {/* Email or phone */}
               <div>
                 <label
-                  htmlFor="email"
+                  htmlFor="identifier"
                   className="block text-sm font-medium text-brand-dark-text mb-1.5"
                 >
-                  Email address
+                  Email or phone
                 </label>
                 <input
-                  id="email"
-                  type="email"
+                  id="identifier"
+                  type="text"
                   required
-                  autoComplete="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="username"
+                  inputMode="email"
+                  placeholder="you@example.com or (305) 555-1234"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
                   disabled={loading}
                   className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm text-brand-dark-text placeholder:text-gray-400 outline-none transition-all focus:border-brand-navy focus:ring-2 focus:ring-brand-navy/20 disabled:opacity-60 disabled:cursor-not-allowed"
                 />

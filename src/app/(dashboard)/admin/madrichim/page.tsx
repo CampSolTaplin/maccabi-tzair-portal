@@ -85,6 +85,7 @@ export default function AdminUsersPage() {
   const [newFirst, setNewFirst] = useState('');
   const [newLast, setNewLast] = useState('');
   const [newEmail, setNewEmail] = useState('');
+  const [newPhone, setNewPhone] = useState('');
   const [newRole, setNewRole] = useState<UserRole>('madrich');
   const [newGroupId, setNewGroupId] = useState('');
   const [newGroupIds, setNewGroupIds] = useState<string[]>([]);
@@ -143,7 +144,7 @@ export default function AdminUsersPage() {
   };
 
   const createMutation = useMutation({
-    mutationFn: async (body: { email: string; firstName: string; lastName: string; role: UserRole; groupId?: string; groupIds?: string[] }) => {
+    mutationFn: async (body: { email?: string; phone?: string; firstName: string; lastName: string; role: UserRole; groupId?: string; groupIds?: string[] }) => {
       const res = await fetch('/api/admin/madrichim', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -161,6 +162,7 @@ export default function AdminUsersPage() {
       setNewFirst('');
       setNewLast('');
       setNewEmail('');
+      setNewPhone('');
       setNewRole('madrich');
       setNewGroupId('');
       setNewGroupIds([]);
@@ -246,11 +248,14 @@ export default function AdminUsersPage() {
   }
 
   function handleCreate() {
-    if (!newFirst || !newLast || !newEmail) return;
+    if (!newFirst || !newLast) return;
+    const allowsPhone = newRole === 'madrich' || newRole === 'mazkirut';
+    if (!newEmail && !(allowsPhone && newPhone)) return;
     if (newRole === 'coordinator' || newRole === 'mazkirut') {
       if (newGroupIds.length === 0) return;
       createMutation.mutate({
         email: newEmail,
+        phone: allowsPhone ? newPhone : undefined,
         firstName: newFirst,
         lastName: newLast,
         role: newRole,
@@ -260,6 +265,7 @@ export default function AdminUsersPage() {
       if (!newGroupId) return;
       createMutation.mutate({
         email: newEmail,
+        phone: newPhone,
         firstName: newFirst,
         lastName: newLast,
         role: newRole,
@@ -285,7 +291,9 @@ export default function AdminUsersPage() {
 
   const needsGroup = newRole === 'madrich';
   const needsMultiGroup = newRole === 'coordinator' || newRole === 'mazkirut';
-  const canCreate = newFirst && newLast && newEmail && (
+  const allowsPhoneLogin = newRole === 'madrich' || newRole === 'mazkirut';
+  const hasIdentifier = !!newEmail || (allowsPhoneLogin && !!newPhone);
+  const canCreate = newFirst && newLast && hasIdentifier && (
     newRole === 'admin' ||
     (newRole === 'madrich' && newGroupId) ||
     ((newRole === 'coordinator' || newRole === 'mazkirut') && newGroupIds.length > 0)
@@ -709,12 +717,22 @@ export default function AdminUsersPage() {
                 className={inputClass}
               />
               <input
-                placeholder="Email"
+                placeholder={allowsPhoneLogin ? 'Email (optional if phone given)' : 'Email'}
                 type="email"
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
                 className={inputClass}
               />
+              {allowsPhoneLogin && (
+                <input
+                  placeholder="Phone (e.g. (305) 555-1234)"
+                  type="tel"
+                  inputMode="tel"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  className={inputClass}
+                />
+              )}
               <select
                 value={newRole}
                 onChange={(e) => {

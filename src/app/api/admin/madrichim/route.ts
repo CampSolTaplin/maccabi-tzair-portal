@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { normalizeUSPhone } from '@/lib/auth/phone';
+
+const PHONE_LOGIN_ROLES = new Set(['madrich', 'mazkirut']);
 
 /* ─── Helpers ─── */
 
@@ -184,7 +187,7 @@ export async function POST(request: NextRequest) {
     const auth = await requireAdmin(supabase);
     if ('error' in auth && auth.error) return auth.error;
 
-    const { email, firstName, lastName, groupId, groupIds, role } = await request.json();
+    const { email, phone, firstName, lastName, groupId, groupIds, role } = await request.json();
     const userRole = role ?? 'madrich';
 
     // Coordinators and mazkirut can receive groupIds array; madrichim use single groupId
@@ -195,9 +198,38 @@ export async function POST(request: NextRequest) {
           ? [groupId]
           : [];
 
-    if (!email || !firstName || !lastName) {
+    if (!firstName || !lastName) {
       return NextResponse.json(
-        { error: 'email, firstName, and lastName are required' },
+        { error: 'firstName and lastName are required' },
+        { status: 400 }
+      );
+    }
+
+    // Phone login is only available for madrich and mazkirut. All other roles
+    // (admin, coordinator) must be created with an email.
+    const cleanEmail: string | null =
+      typeof email === 'string' && email.trim().length > 0 ? email.trim() : null;
+
+    let normalizedPhone: string | null = null;
+    if (typeof phone === 'string' && phone.trim().length > 0) {
+      if (!PHONE_LOGIN_ROLES.has(userRole)) {
+        return NextResponse.json(
+          { error: 'Phone login is only available for madrich and mazkirut roles' },
+          { status: 400 }
+        );
+      }
+      normalizedPhone = normalizeUSPhone(phone);
+      if (!normalizedPhone) {
+        return NextResponse.json(
+          { error: 'Phone must be a valid 10-digit US number' },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (!cleanEmail && !normalizedPhone) {
+      return NextResponse.json(
+        { error: 'An email or phone number is required' },
         { status: 400 }
       );
     }
@@ -220,16 +252,31 @@ export async function POST(request: NextRequest) {
     const password = generatePassword(lastName);
 
     // 1. Create auth user
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email,
+    const createPayload: {
+      email?: string;
+      phone?: string;
+      password: string;
+      email_confirm?: boolean;
+      phone_confirm?: boolean;
+      user_metadata: { role: string; first_name: string; last_name: string };
+    } = {
       password,
-      email_confirm: true,
       user_metadata: {
         role: userRole,
         first_name: firstName,
         last_name: lastName,
       },
-    });
+    };
+    if (cleanEmail) {
+      createPayload.email = cleanEmail;
+      createPayload.email_confirm = true;
+    }
+    if (normalizedPhone) {
+      createPayload.phone = normalizedPhone;
+      createPayload.phone_confirm = true;
+    }
+
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser(createPayload);
 
     if (authError) {
       throw new Error(`Failed to create auth user: ${authError.message}`);
@@ -244,6 +291,7 @@ export async function POST(request: NextRequest) {
         first_name: firstName,
         last_name: lastName,
         role: userRole,
+        phone: normalizedPhone,
         is_active: true,
       },
       { onConflict: 'id' }
@@ -477,11 +525,44 @@ export async function PATCH(request: NextRequest) {
     if (action === 'update_profile') {
       const { firstName, lastName, phone, email } = await request.json();
 
+      // If a phone was provided, normalize and validate it before touching
+      // anything. We allow phone login only for madrich and mazkirut.
+      let phoneForProfile: string | null | undefined;
+      let phoneForAuth: string | null | undefined;
+      if (typeof phone === 'string') {
+        if (phone.trim().length === 0) {
+          // Explicit clear
+          phoneForProfile = null;
+          phoneForAuth = null;
+        } else {
+          const { data: targetProfile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', profileId)
+            .single();
+          if (!targetProfile || !PHONE_LOGIN_ROLES.has(targetProfile.role)) {
+            return NextResponse.json(
+              { error: 'Phone login is only available for madrich and mazkirut roles' },
+              { status: 400 }
+            );
+          }
+          const normalized = normalizeUSPhone(phone);
+          if (!normalized) {
+            return NextResponse.json(
+              { error: 'Phone must be a valid 10-digit US number' },
+              { status: 400 }
+            );
+          }
+          phoneForProfile = normalized;
+          phoneForAuth = normalized;
+        }
+      }
+
       // Update profile fields
       const profileUpdate: Record<string, unknown> = {};
       if (firstName) profileUpdate.first_name = firstName;
       if (lastName) profileUpdate.last_name = lastName;
-      if (typeof phone === 'string') profileUpdate.phone = phone || null;
+      if (phoneForProfile !== undefined) profileUpdate.phone = phoneForProfile;
 
       if (Object.keys(profileUpdate).length > 0) {
         const { error: profileError } = await supabase
@@ -491,6 +572,52 @@ export async function PATCH(request: NextRequest) {
 
         if (profileError) {
           throw new Error(`Failed to update profile: ${profileError.message}`);
+        }
+      }
+
+      // Sync phone to auth.users so the user can log in with it.
+      if (phoneForAuth !== undefined) {
+        const { data: existingAuth } = await supabase.auth.admin.getUserById(profileId);
+        if (existingAuth?.user) {
+          const { error: phoneSyncError } = await supabase.auth.admin.updateUserById(profileId, {
+            phone: phoneForAuth ?? '',
+            phone_confirm: true,
+          });
+          if (phoneSyncError) {
+            throw new Error(`Failed to sync phone to auth: ${phoneSyncError.message}`);
+          }
+        } else if (phoneForAuth) {
+          // No auth user yet — create one with phone-only login.
+          const currentProfile = await supabase
+            .from('profiles')
+            .select('last_name, role, first_name')
+            .eq('id', profileId)
+            .single();
+          const generated = generatePassword(currentProfile.data?.last_name ?? 'user');
+          const { error: createError } = await supabase.auth.admin.createUser({
+            id: profileId,
+            phone: phoneForAuth,
+            password: generated,
+            phone_confirm: true,
+            user_metadata: {
+              role: currentProfile.data?.role ?? 'madrich',
+              first_name: currentProfile.data?.first_name ?? '',
+              last_name: currentProfile.data?.last_name ?? '',
+            },
+          });
+          if (createError) {
+            throw new Error(`Failed to create auth account: ${createError.message}`);
+          }
+          await supabase
+            .from('profiles')
+            .update({ needs_email: false })
+            .eq('id', profileId);
+          return NextResponse.json({
+            success: true,
+            action: 'profile_updated',
+            authCreated: true,
+            generatedPassword: generated,
+          });
         }
       }
 
