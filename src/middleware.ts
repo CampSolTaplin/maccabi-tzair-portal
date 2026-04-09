@@ -25,6 +25,7 @@ const ROLE_ROUTES: Record<string, string> = {
   admin: '/admin',
   coordinator: '/admin',
   madrich: '/madrich',
+  mazkirut: '/madrich',
   participant: '/participant',
   parent: '/parent',
 };
