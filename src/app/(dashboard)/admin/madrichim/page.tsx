@@ -89,6 +89,14 @@ export default function AdminUsersPage() {
   const [newEmail, setNewEmail] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [newRole, setNewRole] = useState<UserRole>('madrich');
+  const [resetAllState, setResetAllState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'confirm1' }
+    | { kind: 'confirm2' }
+    | { kind: 'running' }
+    | { kind: 'done'; total: number; succeeded: number; failed: number; errors: Array<{ label: string; error: string }> }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
   const [newGroupId, setNewGroupId] = useState('');
   const [newGroupIds, setNewGroupIds] = useState<string[]>([]);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
@@ -288,6 +296,36 @@ export default function AdminUsersPage() {
       navigator.clipboard.writeText(createdPassword);
       setCopiedPassword(true);
       setTimeout(() => setCopiedPassword(false), 2000);
+    }
+  }
+
+  async function handleResetAllPasswords() {
+    setResetAllState({ kind: 'running' });
+    try {
+      const res = await fetch('/api/admin/reset-all-passwords', {
+        method: 'POST',
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setResetAllState({
+          kind: 'error',
+          message: body?.error || 'Request failed',
+        });
+        return;
+      }
+      setResetAllState({
+        kind: 'done',
+        total: body.total ?? 0,
+        succeeded: body.succeeded ?? 0,
+        failed: body.failed ?? 0,
+        errors: body.errors ?? [],
+      });
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    } catch (err) {
+      setResetAllState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
   }
 
@@ -943,6 +981,140 @@ export default function AdminUsersPage() {
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <Users className="h-12 w-12 text-gray-300 mb-3" />
             <p className="text-brand-muted">No users found. Create your first user above.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Danger zone */}
+      {!isLoading && !error && allUsers.length > 0 && (
+        <Card className="border-red-200 bg-red-50/40 mt-10">
+          <CardContent className="py-5 space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-red-700 uppercase tracking-wider">
+                Danger zone
+              </h3>
+              <p className="text-sm text-red-900/80 mt-1">
+                Reset every user (admins, coordinators, madrichim, mazkirut) to
+                the shared default password{' '}
+                <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-red-200">
+                  M@rjcc2026
+                </code>
+                . They will be forced to pick a new password on their next
+                login. <strong>You will be affected too</strong> — make sure
+                you know the default and have your MFA handy.
+              </p>
+            </div>
+
+            {resetAllState.kind === 'idle' && (
+              <Button
+                variant="outline"
+                onClick={() => setResetAllState({ kind: 'confirm1' })}
+                className="border-red-300 text-red-700 hover:bg-red-100"
+              >
+                Reset all passwords
+              </Button>
+            )}
+
+            {resetAllState.kind === 'confirm1' && (
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-red-900">
+                  This will reset ALL users. Are you sure?
+                </p>
+                <Button
+                  variant="outline"
+                  onClick={() => setResetAllState({ kind: 'confirm2' })}
+                  className="border-red-300 text-red-700 hover:bg-red-100"
+                >
+                  Yes, continue
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setResetAllState({ kind: 'idle' })}
+                >
+                  Cancel
+                </Button>
+              </div>
+            )}
+
+            {resetAllState.kind === 'confirm2' && (
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-red-900">
+                  Last chance — this is irreversible. Proceed?
+                </p>
+                <Button
+                  onClick={handleResetAllPasswords}
+                  className="bg-red-600 hover:bg-red-700 text-white"
+                >
+                  Reset all now
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setResetAllState({ kind: 'idle' })}
+                >
+                  Cancel
+                </Button>
+              </div>
+            )}
+
+            {resetAllState.kind === 'running' && (
+              <div className="flex items-center gap-2 text-sm text-red-900">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Resetting all users...
+              </div>
+            )}
+
+            {resetAllState.kind === 'done' && (
+              <div className="rounded-lg bg-white border border-emerald-200 px-4 py-3 text-sm">
+                <p className="font-semibold text-emerald-800">
+                  Done. {resetAllState.succeeded} of {resetAllState.total} users
+                  were reset.
+                </p>
+                {resetAllState.failed > 0 && (
+                  <p className="text-red-700 mt-1">
+                    {resetAllState.failed} failed. See details below.
+                  </p>
+                )}
+                <p className="text-emerald-700 mt-1">
+                  Everyone now has password{' '}
+                  <code className="font-mono bg-emerald-50 px-1.5 py-0.5 rounded">
+                    M@rjcc2026
+                  </code>{' '}
+                  and will be prompted to change it on next login.
+                </p>
+                {resetAllState.errors.length > 0 && (
+                  <ul className="mt-2 list-disc list-inside text-xs text-red-700">
+                    {resetAllState.errors.map((e, i) => (
+                      <li key={i}>
+                        {e.label}: {e.error}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="mt-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => setResetAllState({ kind: 'idle' })}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {resetAllState.kind === 'error' && (
+              <div className="rounded-lg bg-white border border-red-300 px-4 py-3 text-sm">
+                <p className="font-semibold text-red-800">Error</p>
+                <p className="text-red-700 mt-1">{resetAllState.message}</p>
+                <div className="mt-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => setResetAllState({ kind: 'idle' })}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
