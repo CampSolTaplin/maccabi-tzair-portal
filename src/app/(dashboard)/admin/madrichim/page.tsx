@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import * as XLSX from 'xlsx';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +25,7 @@ import {
   Trash2,
   Pencil,
   Save,
+  Download,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -287,6 +289,49 @@ export default function AdminUsersPage() {
       setCopiedPassword(true);
       setTimeout(() => setCopiedPassword(false), 2000);
     }
+  }
+
+  function handleExport() {
+    const rows = allUsers.map((u) => {
+      // Hide synthetic internal emails (phone-xxx@mtz.local) from the export
+      const isSynthetic = !!u.email && u.email.endsWith('@mtz.local');
+      return {
+        'First Name': u.firstName,
+        'Last Name': u.lastName,
+        Role: ROLE_CONFIG[u.role]?.label ?? u.role,
+        Email: isSynthetic ? '' : (u.email ?? ''),
+        Phone: u.phone ?? '',
+        Groups: u.groups.map((g) => g.groupName).join('; '),
+        Areas: Array.from(new Set(u.groups.map((g) => g.groupArea).filter(Boolean))).join('; '),
+        Active: u.isActive ? 'Yes' : 'No',
+      };
+    });
+
+    // Sort: active first, then by role, then by last name
+    rows.sort((a, b) => {
+      if (a.Active !== b.Active) return a.Active === 'Yes' ? -1 : 1;
+      if (a.Role !== b.Role) return a.Role.localeCompare(b.Role);
+      return a['Last Name'].localeCompare(b['Last Name']);
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Set reasonable column widths
+    ws['!cols'] = [
+      { wch: 14 }, // First Name
+      { wch: 16 }, // Last Name
+      { wch: 12 }, // Role
+      { wch: 32 }, // Email
+      { wch: 14 }, // Phone
+      { wch: 30 }, // Groups
+      { wch: 18 }, // Areas
+      { wch: 8 },  // Active
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Users');
+
+    const today = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `maccabi-tzair-users-${today}.xlsx`);
   }
 
   const needsGroup = newRole === 'madrich';
@@ -634,10 +679,21 @@ export default function AdminUsersPage() {
           <h2 className="text-2xl font-bold text-brand-navy">Users</h2>
           <p className="mt-1 text-sm text-brand-muted">Manage administrators, coordinators, and madrichim</p>
         </div>
-        <Button onClick={() => { setShowCreate(!showCreate); setCreatedPassword(null); }}>
-          {showCreate ? <X className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
-          {showCreate ? 'Cancel' : 'Add User'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={allUsers.length === 0}
+            title="Download all users as an Excel file"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </Button>
+          <Button onClick={() => { setShowCreate(!showCreate); setCreatedPassword(null); }}>
+            {showCreate ? <X className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+            {showCreate ? 'Cancel' : 'Add User'}
+          </Button>
+        </div>
       </div>
 
       {/* Summary cards */}
