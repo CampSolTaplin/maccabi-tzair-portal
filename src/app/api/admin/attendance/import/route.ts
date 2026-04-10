@@ -3,19 +3,16 @@ import * as XLSX from 'xlsx';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getAuthContext } from '@/lib/supabase/auth-helpers';
 
-const PLANNING_SLUGS = new Set(['som-planning', 'staff-planning']);
-
 interface AreaConfig {
   areas?: string[];
   slugs?: string[];
-  alwaysIncludeSlugs?: string[];
 }
 
 const AREA_CONFIG: Record<string, AreaConfig> = {
-  katan: { areas: ['katan'], alwaysIncludeSlugs: ['staff-planning'] },
-  noar: { areas: ['noar'], alwaysIncludeSlugs: ['staff-planning'] },
-  'pre-som': { slugs: ['pre-som'], alwaysIncludeSlugs: ['staff-planning'] },
-  som: { slugs: ['som', 'som-planning'] },
+  katan: { areas: ['katan'] },
+  noar: { areas: ['noar'] },
+  'pre-som': { slugs: ['pre-som'] },
+  som: { slugs: ['som'] },
 };
 
 const MONTH_MAP: Record<string, { month: number; year: number }> = {
@@ -239,8 +236,6 @@ export async function POST(request: NextRequest) {
     }
 
     // ─── Resolve the group set we're importing into ───
-    // For group_id path: single group.
-    // For area path: all groups in the area (including the relevant planning group).
     let targetGroupIds: string[] = [];
     if (areaParam) {
       const config = AREA_CONFIG[areaParam];
@@ -263,29 +258,9 @@ export async function POST(request: NextRequest) {
         }
         areaGroups = data ?? [];
       }
-      if (config.alwaysIncludeSlugs?.length) {
-        const { data: extras } = await supabase
-          .from('groups')
-          .select('id, slug')
-          .in('slug', config.alwaysIncludeSlugs)
-          .eq('is_active', true);
-        for (const e of extras ?? []) {
-          if (!areaGroups.some((g) => g.id === e.id)) areaGroups.push(e);
-        }
-      }
 
-      // Coordinator filter: same expansion logic as staff-by-area so a
-      // coordinator of SOM also lands in SOM Planning when importing.
       if (auth.groupIds) {
         const authorized = new Set(auth.groupIds);
-        const coversNonPlanning = areaGroups.some(
-          (g) => authorized.has(g.id) && !PLANNING_SLUGS.has(g.slug)
-        );
-        if (coversNonPlanning) {
-          for (const g of areaGroups) {
-            if (PLANNING_SLUGS.has(g.slug)) authorized.add(g.id);
-          }
-        }
         areaGroups = areaGroups.filter((g) => authorized.has(g.id));
       }
 

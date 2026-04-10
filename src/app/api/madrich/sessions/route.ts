@@ -2,10 +2,6 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 
-// Keep this in sync with /api/madrich/group-members — madrichim don't
-// take chanichim attendance for the planning groups.
-const EXCLUDED_GROUP_SLUGS = ['som-planning', 'staff-planning'];
-
 export async function GET() {
   try {
     const supabase = await createClient();
@@ -17,29 +13,27 @@ export async function GET() {
 
     const admin = createAdminClient();
 
-    // Pick the first non-planning group membership
-    const { data: memberships } = await admin
+    const { data: membership } = await admin
       .from('group_memberships')
-      .select('group_id, groups(id, slug)')
+      .select('group_id')
       .eq('profile_id', user.id)
       .in('role', ['madrich', 'mazkirut'])
-      .eq('is_active', true);
-
-    const membership = (memberships ?? []).find((m) => {
-      const g = m.groups as unknown as { slug: string } | null;
-      return g && !EXCLUDED_GROUP_SLUGS.includes(g.slug);
-    });
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
 
     if (!membership) {
       return NextResponse.json({ error: 'No group assigned' }, { status: 404 });
     }
 
-    // Get all non-cancelled sessions for this group
+    // Only show regular sessions in the madrich take-attendance flow.
+    // Planning sessions don't have chanichim to mark.
     const { data: sessions } = await admin
       .from('sessions')
       .select('id, session_date, is_locked, is_cancelled, attendance_records(count)')
       .eq('group_id', membership.group_id)
       .eq('is_cancelled', false)
+      .neq('session_type', 'planning')
       .order('session_date', { ascending: false });
 
     const result = (sessions ?? []).map((s) => ({

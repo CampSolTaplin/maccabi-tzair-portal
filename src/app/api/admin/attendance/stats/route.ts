@@ -18,12 +18,19 @@ export async function GET(request: NextRequest) {
     const supabase = createAdminClient();
     const today = format(new Date(), 'yyyy-MM-dd');
 
-    // Fetch sessions for this group
-    const { data: sessions, error: sessionsError } = await supabase
+    // Fetch sessions for this group. In the chanichim view (default) we
+    // skip sessions with session_type='planning' since those are
+    // madrich-only and shouldn't show chanichim columns. The staff view
+    // keeps everything.
+    let sessionsQuery = supabase
       .from('sessions')
-      .select('id, session_date, is_cancelled, is_locked, is_locked_staff')
+      .select('id, session_date, is_cancelled, is_locked, is_locked_staff, session_type')
       .eq('group_id', groupId)
       .order('session_date', { ascending: true });
+    if (!isStaffView) {
+      sessionsQuery = sessionsQuery.neq('session_type', 'planning');
+    }
+    const { data: sessions, error: sessionsError } = await sessionsQuery;
 
     if (sessionsError) throw new Error(sessionsError.message);
 

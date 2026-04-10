@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     // Fetch all active schedules
     const { data: schedules, error: schedError } = await supabase
       .from('schedules')
-      .select('id, group_id, day_of_week')
+      .select('id, group_id, day_of_week, session_type')
       .eq('is_active', true);
 
     if (schedError) {

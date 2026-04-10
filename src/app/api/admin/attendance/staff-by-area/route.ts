@@ -6,40 +6,24 @@ import { getAuthContext } from '@/lib/supabase/auth-helpers';
 /**
  * GET /api/admin/attendance/staff-by-area?area=katan|noar|pre-som|som
  *
- * Returns a flat list of madrichim / mazkirut across an entire area,
- * with sessions from every group in that area (including the right
- * planning group) merged into a single grid. This is what the user
- * sees on /admin/madrich-attendance.
- *
- * The grid is built frontend-side from this payload:
- *   sessions[]     — one entry per actual session row (group + date)
- *   participants[] — one entry per staff member (deduped), with their
- *                    primary group for display and a records map keyed
- *                    by session_id so the frontend can look up the
- *                    status in O(1).
- *
- * The frontend merges sessions by date when rendering columns and
- * uses the member's group memberships to pick the right session
- * cell for each (member, date) pair.
+ * Staff attendance data for the whole area in one payload. After the
+ * migration 011 refactor, planning sessions live inside each primary
+ * group (tagged with session_type='planning'), so this endpoint just
+ * has to fetch the area's groups and return everything. No more
+ * separate SOM Planning / Staff Planning groups to merge.
  */
 
 interface AreaConfig {
-  /** Match groups.area field */
   areas?: string[];
-  /** Match groups.slug exactly */
   slugs?: string[];
-  /** Always include these groups by slug (e.g. the staff-planning group) */
-  alwaysIncludeSlugs?: string[];
 }
 
 const AREA_CONFIG: Record<string, AreaConfig> = {
-  katan: { areas: ['katan'], alwaysIncludeSlugs: ['staff-planning'] },
-  noar: { areas: ['noar'], alwaysIncludeSlugs: ['staff-planning'] },
-  'pre-som': { slugs: ['pre-som'], alwaysIncludeSlugs: ['staff-planning'] },
-  som: { slugs: ['som', 'som-planning'] },
+  katan: { areas: ['katan'] },
+  noar: { areas: ['noar'] },
+  'pre-som': { slugs: ['pre-som'] },
+  som: { slugs: ['som'] },
 };
-
-const PLANNING_SLUGS = new Set(['som-planning', 'staff-planning']);
 
 export async function GET(request: NextRequest) {
   try {
@@ -82,48 +66,19 @@ export async function GET(request: NextRequest) {
       areaGroups = data ?? [];
     }
 
-    // Add the extra "always include" groups (staff-planning)
-    if (config.alwaysIncludeSlugs && config.alwaysIncludeSlugs.length > 0) {
-      const { data: extras } = await supabase
-        .from('groups')
-        .select('id, name, slug, area')
-        .in('slug', config.alwaysIncludeSlugs)
-        .eq('is_active', true);
-      for (const e of extras ?? []) {
-        if (!areaGroups.some((g) => g.id === e.id)) {
-          areaGroups.push(e);
-        }
-      }
-    }
-
-    // Coordinator: filter groups to only those they coordinate. Any
-    // coordinator that covers at least one non-planning group in the area
-    // also implicitly gets the matching planning group (SOM Planning for
-    // SOM coordinators, Staff Planning for Katan/Noar/Pre-SOM
-    // coordinators). That way an SOM coordinator also marks the Monday
-    // planning sessions without needing a separate coordinator row.
+    // Coordinator: only keep groups they coordinate
     if (auth.groupIds) {
       const authorized = new Set(auth.groupIds);
-
-      const nonPlanningInArea = areaGroups.filter(
-        (g) => !PLANNING_SLUGS.has(g.slug)
-      );
-      const planningInArea = areaGroups.filter((g) =>
-        PLANNING_SLUGS.has(g.slug)
-      );
-
-      const coversNonPlanning = nonPlanningInArea.some((g) =>
-        authorized.has(g.id)
-      );
-      if (coversNonPlanning) {
-        for (const g of planningInArea) authorized.add(g.id);
-      }
-
       areaGroups = areaGroups.filter((g) => authorized.has(g.id));
     }
 
     if (areaGroups.length === 0) {
-      return NextResponse.json({ area, sessions: [], participants: [] });
+      return NextResponse.json({
+        area,
+        sessions: [],
+        participants: [],
+        events: [],
+      });
     }
 
     const groupMap = new Map(areaGroups.map((g) => [g.id, g]));
@@ -132,7 +87,7 @@ export async function GET(request: NextRequest) {
     // ─── 2. Sessions in those groups ───
     const { data: sessionRows, error: sessErr } = await supabase
       .from('sessions')
-      .select('id, group_id, session_date, is_cancelled, is_locked_staff')
+      .select('id, group_id, session_date, session_type, is_cancelled')
       .in('group_id', groupIds)
       .order('session_date', { ascending: true });
     if (sessErr) throw new Error(sessErr.message);
@@ -151,12 +106,7 @@ export async function GET(request: NextRequest) {
     if (memErr) throw new Error(memErr.message);
 
     // ─── 4. Attendance records for those sessions ───
-    // Chunk in small batches and pass .limit(10000) so we don't silently
-    // hit Supabase's default 1000-row cap. With say 9 staff members ×
-    // 200 sessions per chunk = up to 1800 rows per query — enough to
-    // blow the default limit and truncate the response, which on the
-    // client looks like other people's marks mysteriously "disappearing"
-    // when you click a cell.
+    // Small chunks + explicit limit to stay under Supabase's default 1000-row cap.
     const records: Array<{ session_id: string; participant_id: string; status: string }> = [];
     if (sessionIds.length > 0) {
       for (let i = 0; i < sessionIds.length; i += 50) {
@@ -170,7 +120,47 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ─── 5. Deduplicate participants across memberships ───
+    // ─── 5. Events linked to any of these groups ───
+    const { data: eventGroupLinks } = await supabase
+      .from('event_groups')
+      .select('event_id')
+      .in('group_id', groupIds);
+    const eventIds = Array.from(
+      new Set((eventGroupLinks ?? []).map((e) => e.event_id))
+    );
+
+    let eventList: Array<{
+      id: string;
+      name: string;
+      event_date: string;
+      real_hours: number;
+    }> = [];
+    let eventAttendance: Array<{ event_id: string; participant_id: string; attended: boolean }> = [];
+    if (eventIds.length > 0) {
+      const { data: evs } = await supabase
+        .from('events')
+        .select('id, name, event_date, real_hours')
+        .in('id', eventIds)
+        .order('event_date');
+      eventList = evs ?? [];
+
+      const { data: ea } = await supabase
+        .from('event_attendance')
+        .select('event_id, participant_id, attended')
+        .in('event_id', eventIds)
+        .limit(10000);
+      eventAttendance = ea ?? [];
+    }
+
+    const eventAttendanceMap = new Map<string, Map<string, boolean>>();
+    for (const ea of eventAttendance) {
+      if (!eventAttendanceMap.has(ea.event_id)) {
+        eventAttendanceMap.set(ea.event_id, new Map());
+      }
+      eventAttendanceMap.get(ea.event_id)!.set(ea.participant_id, ea.attended);
+    }
+
+    // ─── 6. Deduplicate participants across memberships ───
     interface BuildMember {
       id: string;
       firstName: string;
@@ -192,12 +182,10 @@ export async function GET(request: NextRequest) {
 
       const existing = participantMap.get(p.id);
       const group = groupMap.get(m.group_id);
-      const isPlanning = group ? PLANNING_SLUGS.has(group.slug) : false;
 
       if (existing) {
         existing.groupIds.add(m.group_id);
-        // Upgrade primary group to a non-planning group if we haven't set one yet
-        if (!existing.primaryGroupId && !isPlanning && group) {
+        if (!existing.primaryGroupId && group) {
           existing.primaryGroupId = group.id;
           existing.primaryGroupName = group.name;
         }
@@ -208,13 +196,13 @@ export async function GET(request: NextRequest) {
           lastName: p.last_name,
           role: m.role as 'madrich' | 'mazkirut',
           groupIds: new Set([m.group_id]),
-          primaryGroupId: isPlanning ? null : m.group_id,
-          primaryGroupName: isPlanning ? null : group?.name ?? null,
+          primaryGroupId: group?.id ?? null,
+          primaryGroupName: group?.name ?? null,
         });
       }
     }
 
-    // ─── 6. Build records map per participant ───
+    // ─── 7. Build records map per participant ───
     const recordsByParticipant = new Map<string, Map<string, string>>();
     for (const r of records) {
       if (!recordsByParticipant.has(r.participant_id)) {
@@ -223,18 +211,7 @@ export async function GET(request: NextRequest) {
       recordsByParticipant.get(r.participant_id)!.set(r.session_id, r.status);
     }
 
-    // ─── 7. Flatten participants for response + compute stats ───
-    const sessionInfoById = new Map(
-      sessionList.map((s) => [
-        s.id,
-        {
-          group_id: s.group_id,
-          date: s.session_date,
-          isCancelled: s.is_cancelled,
-        },
-      ])
-    );
-
+    // ─── 8. Build participants list + compute stats ───
     const participants = Array.from(participantMap.values()).map((p) => {
       const mine = recordsByParticipant.get(p.id) ?? new Map();
       const recordsObj: Record<string, string> = {};
@@ -242,7 +219,8 @@ export async function GET(request: NextRequest) {
         recordsObj[sessionId] = status;
       }
 
-      // Percentage: past, non-cancelled sessions from the member's groups
+      // Percentage: past non-cancelled sessions in the member's groups,
+      // both regular and planning count toward staff attendance.
       let present = 0;
       let total = 0;
       for (const s of sessionList) {
@@ -253,6 +231,17 @@ export async function GET(request: NextRequest) {
         const st = recordsObj[s.id];
         if (st === 'present' || st === 'late') present += 1;
       }
+
+      // Event hours: counted for events linked to any of the member's groups.
+      // Default attended=true unless explicit event_attendance.attended=false.
+      const eventRecords: Record<string, boolean> = {};
+      for (const ev of eventList) {
+        if (ev.event_date > today) continue;
+        const explicit = eventAttendanceMap.get(ev.id)?.get(p.id);
+        const attended = explicit === undefined ? true : explicit;
+        eventRecords[ev.id] = attended;
+      }
+
       const percentage = total > 0 ? Math.round((present / total) * 100) : 0;
 
       return {
@@ -264,36 +253,43 @@ export async function GET(request: NextRequest) {
         primaryGroupName: p.primaryGroupName,
         groupIds: Array.from(p.groupIds),
         records: recordsObj,
+        eventRecords,
         stats: { percentage, present, total },
       };
     });
 
-    // Sort by last name initially (frontend can re-sort)
     participants.sort(
       (a, b) =>
         a.lastName.localeCompare(b.lastName, undefined, { sensitivity: 'base' }) ||
         a.firstName.localeCompare(b.firstName, undefined, { sensitivity: 'base' })
     );
 
-    // ─── 8. Build session headers ───
+    // ─── 9. Build session headers ───
     const sessionsWithRecords = new Set(records.map((r) => r.session_id));
     const sessions = sessionList.map((s) => {
       const g = groupMap.get(s.group_id);
-      void sessionInfoById; // lookup map is for readers, keep it in scope
       return {
         id: s.id,
         groupId: s.group_id,
         groupName: g?.name ?? 'Unknown',
         groupSlug: g?.slug ?? '',
         date: s.session_date,
+        sessionType: (s.session_type ?? 'regular') as 'regular' | 'planning',
         isCancelled: s.is_cancelled,
-        isLocked: !!s.is_locked_staff,
         hasAttendance: sessionsWithRecords.has(s.id),
         isFuture: s.session_date > today,
       };
     });
 
-    return NextResponse.json({ area, sessions, participants });
+    // ─── 10. Build events list ───
+    const events = eventList.map((e) => ({
+      id: e.id,
+      name: e.name,
+      date: e.event_date,
+      hours: Number(e.real_hours ?? 0),
+    }));
+
+    return NextResponse.json({ area, sessions, participants, events });
   } catch (err) {
     console.error('staff-by-area error:', err);
     return NextResponse.json(

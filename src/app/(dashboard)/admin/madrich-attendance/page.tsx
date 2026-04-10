@@ -42,13 +42,22 @@ interface StaffParticipant {
   primaryGroupName: string | null;
   groupIds: string[];
   records: Record<string, Status>;
+  eventRecords: Record<string, boolean>;
   stats: { percentage: number; present: number; total: number };
+}
+
+interface EventHeader {
+  id: string;
+  name: string;
+  date: string;
+  hours: number;
 }
 
 interface StaffAreaResponse {
   area: string;
   sessions: SessionRow[];
   participants: StaffParticipant[];
+  events: EventHeader[];
 }
 
 type AreaKey = 'katan' | 'noar' | 'pre-som' | 'som';
@@ -178,6 +187,7 @@ export default function StaffAttendancePage() {
 
   const sessions = data?.sessions ?? [];
   const participants = data?.participants ?? [];
+  const events = data?.events ?? [];
 
   // Toggle attendance (generic endpoint — role-agnostic). Never locks
   // anything for staff: we just cycle P → L → E → clear on any session,
@@ -755,6 +765,92 @@ export default function StaffAttendancePage() {
                 <span className="w-4 h-4 rounded-md bg-red-50 flex items-center justify-center text-red-300 text-[10px]">—</span>
                 Cancelled
               </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Special events grid */}
+      {!isLoading && !error && participants.length > 0 && events.length > 0 && (
+        <Card>
+          <CardContent className="py-4 px-0">
+            <div className="px-4 pb-2">
+              <h3 className="text-sm font-bold text-brand-navy uppercase tracking-wider">
+                Special Events
+              </h3>
+              <p className="text-xs text-brand-muted mt-0.5">
+                Staff assigned to the event&apos;s groups count as attending by
+                default. Toggle from /admin/events if needed.
+              </p>
+            </div>
+            <div className="overflow-auto">
+              <table className="text-xs border-collapse w-full">
+                <thead>
+                  <tr className="border-b-2 border-gray-200">
+                    <th className="pb-2 pl-4 pr-2 text-left font-semibold text-brand-dark-text text-xs">
+                      Name
+                    </th>
+                    <th className="pb-2 pl-2 pr-2 text-left font-semibold text-brand-dark-text text-xs">
+                      Group
+                    </th>
+                    {events.map((ev) => (
+                      <th
+                        key={ev.id}
+                        className="pb-2 px-2 text-center font-semibold text-purple-700 text-xs"
+                        title={`${ev.name} (${ev.hours}h)`}
+                      >
+                        <div className="flex flex-col items-center">
+                          <span className="truncate max-w-[100px]">{ev.name}</span>
+                          <span className="text-[9px] text-purple-500">
+                            {new Date(ev.date + 'T12:00:00').toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                            })}{' '}
+                            · {ev.hours}h
+                          </span>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedParticipants.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors"
+                    >
+                      <td className="py-1.5 pl-4 pr-2 whitespace-nowrap">
+                        <span className="font-medium text-xs text-brand-dark-text truncate">
+                          {p.lastName}, {p.firstName}
+                        </span>
+                      </td>
+                      <td className="py-1.5 pl-2 pr-2 whitespace-nowrap">
+                        <span className="text-[11px] text-brand-muted truncate">
+                          {p.primaryGroupName ?? '—'}
+                        </span>
+                      </td>
+                      {events.map((ev) => {
+                        const attended = p.eventRecords?.[ev.id] ?? false;
+                        return (
+                          <td key={ev.id} className="py-1.5 px-2 text-center">
+                            <span
+                              className={cn(
+                                'inline-flex w-5 h-5 rounded-md items-center justify-center text-[10px] font-bold',
+                                attended
+                                  ? 'bg-purple-500 text-white'
+                                  : 'bg-gray-100 border border-gray-200 border-dashed'
+                              )}
+                              title={attended ? 'Attending' : 'Not attending'}
+                            >
+                              {attended ? '✓' : ''}
+                            </span>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </CardContent>
         </Card>

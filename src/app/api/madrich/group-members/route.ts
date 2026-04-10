@@ -2,10 +2,6 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 
-// Planning groups don't have chanichim, so madrichim should not pick them
-// up when they're looking for the group whose participants they mark.
-const EXCLUDED_GROUP_SLUGS = ['som-planning', 'staff-planning'];
-
 export async function GET() {
   try {
     const supabase = await createClient();
@@ -17,25 +13,19 @@ export async function GET() {
 
     const admin = createAdminClient();
 
-    // Get madrich's group memberships (may be several). Exclude planning
-    // groups — those are managed by coordinators via /admin/madrich-attendance.
-    const { data: memberships, error: memErr } = await admin
+    // Madrichim / mazkirut take chanichim attendance for the first of
+    // their active group memberships. All groups are primary groups now —
+    // the old "Planning" helper groups are gone after migration 011.
+    const { data: membership, error: memErr } = await admin
       .from('group_memberships')
-      .select('group_id, groups(id, name, slug)')
+      .select('group_id, groups(id, name)')
       .eq('profile_id', user.id)
       .in('role', ['madrich', 'mazkirut'])
-      .eq('is_active', true);
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
 
-    if (memErr) {
-      return NextResponse.json({ error: memErr.message }, { status: 500 });
-    }
-
-    const membership = (memberships ?? []).find((m) => {
-      const g = m.groups as unknown as { slug: string } | null;
-      return g && !EXCLUDED_GROUP_SLUGS.includes(g.slug);
-    });
-
-    if (!membership) {
+    if (memErr || !membership) {
       return NextResponse.json({ error: 'No group assigned' }, { status: 404 });
     }
 
