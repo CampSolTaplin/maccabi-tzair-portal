@@ -106,7 +106,6 @@ export default function TakeAttendancePage() {
   const [members, setMembers] = useState<MemberEntry[]>([]);
   const [search, setSearch] = useState('');
   const [loadingMembers, setLoadingMembers] = useState(false);
-  const [locking, setLocking] = useState(false);
   const [locked, setLocked] = useState(false);
 
   // Auto-select today's session if available
@@ -236,19 +235,14 @@ export default function TakeAttendancePage() {
     [selectedSession, locked, members]
   );
 
-  async function handleLockAndSubmit() {
-    if (!selectedSession) return;
-    setLocking(true);
-    try {
-      const supabase = createClient();
-      await supabase.from('sessions').update({ is_locked: true }).eq('id', selectedSession.id);
-      setLocked(true);
-      refetchSessions();
-    } catch {
-      // ignore
-    } finally {
-      setLocking(false);
-    }
+  async function handleDone() {
+    // Attendance is auto-saved on each click, so "Done" is just a cue that
+    // the madrich is finished marking. Only coordinators / admins can lock
+    // the session — we simply refresh and go back to the session list.
+    refetchSessions();
+    setSelectedSession(null);
+    setMembers([]);
+    setSearch('');
   }
 
   const filteredMembers = members.filter(
@@ -497,25 +491,16 @@ export default function TakeAttendancePage() {
 
       {!locked && members.length > 0 && (
         <button
-          onClick={handleLockAndSubmit}
-          disabled={!allMarked || locking}
+          onClick={handleDone}
+          disabled={!allMarked}
           className={cn(
             'w-full rounded-xl py-4 text-center font-semibold text-white shadow-md transition-all',
-            allMarked && !locking
+            allMarked
               ? 'bg-brand-coral hover:bg-brand-coral/90 hover:-translate-y-0.5 hover:shadow-lg cursor-pointer'
               : 'bg-gray-300 cursor-not-allowed'
           )}
         >
-          {locking ? (
-            <span className="flex items-center justify-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Submitting...
-            </span>
-          ) : allMarked ? (
-            'Lock & Submit Attendance'
-          ) : (
-            `Mark ${members.length - markedCount} remaining`
-          )}
+          {allMarked ? 'Done' : `Mark ${members.length - markedCount} remaining`}
         </button>
       )}
     </div>
