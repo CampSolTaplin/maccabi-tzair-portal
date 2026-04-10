@@ -253,6 +253,38 @@ export default function StaffAttendancePage() {
 
   // Mobile view: set a status directly. If the user clicks a button that's
   // already active, clear the cell.
+  // Toggle attendance for a special event from the staff grid. Mirrors
+  // /admin/events but lets the coordinator mark from the staff view too.
+  const eventToggleMutation = useMutation({
+    mutationFn: async ({
+      eventId,
+      participantId,
+      attended,
+    }: {
+      eventId: string;
+      participantId: string;
+      attended: boolean;
+    }) => {
+      const res = await fetch(`/api/admin/events/${eventId}/attendance`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId, attended }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || 'Failed to toggle event attendance');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['staff-by-area', selectedArea] });
+      queryClient.invalidateQueries({ queryKey: ['event-attendance'] });
+    },
+    onError: (err) => {
+      setImportResult(`Error: ${err instanceof Error ? err.message : 'Toggle failed'}`);
+    },
+  });
+
   const handleSetStatus = useCallback(
     (sessionId: string, participantId: string, current: Status | null, target: Status) => {
       const next = current === target ? null : target;
@@ -1039,8 +1071,8 @@ export default function StaffAttendancePage() {
                 Special Events
               </h3>
               <p className="text-xs text-brand-muted mt-0.5">
-                Staff assigned to the event&apos;s groups count as attending by
-                default. Toggle from /admin/events if needed.
+                Click any cell to toggle attendance. Counts toward the
+                madrich&apos;s community service hours.
               </p>
             </div>
             <div className="overflow-auto">
@@ -1093,17 +1125,26 @@ export default function StaffAttendancePage() {
                         const attended = p.eventRecords?.[ev.id] ?? false;
                         return (
                           <td key={ev.id} className="py-1.5 px-2 text-center">
-                            <span
+                            <button
+                              type="button"
+                              onClick={() =>
+                                eventToggleMutation.mutate({
+                                  eventId: ev.id,
+                                  participantId: p.id,
+                                  attended: !attended,
+                                })
+                              }
+                              disabled={eventToggleMutation.isPending}
                               className={cn(
-                                'inline-flex w-5 h-5 rounded-md items-center justify-center text-[10px] font-bold',
+                                'inline-flex w-6 h-6 rounded-md items-center justify-center text-[11px] font-bold transition-all cursor-pointer hover:scale-110 active:scale-95',
                                 attended
-                                  ? 'bg-purple-500 text-white'
-                                  : 'bg-gray-100 border border-gray-200 border-dashed'
+                                  ? 'bg-purple-500 text-white hover:bg-purple-600'
+                                  : 'bg-gray-100 border border-gray-200 border-dashed text-transparent hover:border-purple-300 hover:bg-purple-50'
                               )}
-                              title={attended ? 'Attending' : 'Not attending'}
+                              title={attended ? 'Click to remove' : 'Click to mark as attending'}
                             >
-                              {attended ? '✓' : ''}
-                            </span>
+                              {attended ? '✓' : '✓'}
+                            </button>
                           </td>
                         );
                       })}
