@@ -7,6 +7,9 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const groupId = searchParams.get('group_id');
+    const roleParam = searchParams.get('role');
+    const isStaffView = roleParam === 'staff';
+    const rolesToFetch = isStaffView ? ['madrich', 'mazkirut'] : ['participant'];
 
     if (!groupId) {
       return NextResponse.json({ error: 'group_id is required' }, { status: 400 });
@@ -18,28 +21,30 @@ export async function GET(request: NextRequest) {
     // Fetch sessions for this group
     const { data: sessions, error: sessionsError } = await supabase
       .from('sessions')
-      .select('id, session_date, is_cancelled, is_locked')
+      .select('id, session_date, is_cancelled, is_locked, is_locked_staff')
       .eq('group_id', groupId)
       .order('session_date', { ascending: true });
 
     if (sessionsError) throw new Error(sessionsError.message);
 
-    // Fetch participants in this group (both active and inactive/dropout)
+    // Fetch members in this group — either participants, or madrichim/mazkirut
+    // for the staff view. Either way we include inactive memberships so the
+    // "dropout" behavior still works for participants (unused for staff).
     const { data: memberships, error: membersError } = await supabase
       .from('group_memberships')
-      .select('profile_id, is_active, profiles(id, first_name, last_name, is_active)')
+      .select('profile_id, is_active, profiles(id, first_name, last_name, is_active, role)')
       .eq('group_id', groupId)
-      .eq('role', 'participant');
+      .in('role', rolesToFetch);
 
     if (membersError) throw new Error(membersError.message);
 
     const participants = (memberships ?? [])
       .map((m) => {
-        const p = m.profiles as unknown as { id: string; first_name: string; last_name: string; is_active: boolean } | null;
+        const p = m.profiles as unknown as { id: string; first_name: string; last_name: string; is_active: boolean; role: string } | null;
         if (!p) return null;
         return { ...p, isDropout: !m.is_active };
       })
-      .filter((p): p is { id: string; first_name: string; last_name: string; is_active: boolean; isDropout: boolean } => p !== null);
+      .filter((p): p is { id: string; first_name: string; last_name: string; is_active: boolean; role: string; isDropout: boolean } => p !== null);
 
     // Fetch all attendance records for these sessions
     const sessionIds = (sessions ?? []).map((s) => s.id);
@@ -80,7 +85,7 @@ export async function GET(request: NextRequest) {
       .map((s) => ({
         id: s.id,
         date: s.session_date,
-        isLocked: s.is_locked,
+        isLocked: isStaffView ? s.is_locked_staff : s.is_locked,
         isCancelled: s.is_cancelled,
         hasAttendance: sessionsWithRecords.has(s.id),
         isFuture: s.session_date > today,

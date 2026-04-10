@@ -1,434 +1,638 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useMemo, useRef, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
-  Calendar,
+  ClipboardCheck,
   AlertTriangle,
   Loader2,
-  Lock,
   Filter,
+  Users,
+  TrendingUp,
   ChevronDown,
-  ChevronRight,
+  ChevronUp,
   Upload,
-  ClipboardCheck,
+  Ban,
+  CheckCircle2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import type { ParticipantStats } from '@/lib/attendance/stats';
 
-interface SessionRow {
+interface SessionHeader {
   id: string;
-  groupId: string;
-  groupName: string;
-  groupSlug: string;
-  groupArea: string;
-  sessionDate: string;
-  sessionType: string;
-  title: string | null;
-  isCancelled: boolean;
-  isLocked: boolean;
-  isLockedStaff: boolean;
-  hoursPresent: number;
-  hoursLate: number;
-  attendanceCount: number;
-}
-
-interface DateGroup {
   date: string;
-  dayLabel: string;
-  dayNum: number;
-  monthLabel: string;
-  sessions: SessionRow[];
-  lockedStaffCount: number;
-  cancelledCount: number;
+  isLocked: boolean;
+  isCancelled: boolean;
+  hasAttendance: boolean;
+  isFuture: boolean;
 }
 
-const AREA_TABS = [
-  { key: 'all', label: 'All Groups' },
-  { key: 'katan', label: 'Katan' },
-  { key: 'noar', label: 'Noar' },
-  { key: 'leadership', label: 'Leadership' },
-] as const;
+interface StatsResponse {
+  sessions: SessionHeader[];
+  participants: ParticipantStats[];
+}
 
-type AreaFilter = (typeof AREA_TABS)[number]['key'];
+interface GroupOption {
+  id: string;
+  name: string;
+  slug: string;
+  area: string;
+}
 
-const GROUP_AREA_COLORS: Record<string, string> = {
-  katan: 'bg-blue-100 text-blue-700 border-blue-200',
-  noar: 'bg-purple-100 text-purple-700 border-purple-200',
-  leadership: 'bg-amber-100 text-amber-700 border-amber-200',
+function getDayAbbr(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  const day = d.getDay();
+  if (day === 6) return 'Sat';
+  if (day === 3) return 'Wed';
+  if (day === 1) return 'Mon';
+  if (day === 2) return 'Tue';
+  return d.toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+function getDayColor(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  const day = d.getDay();
+  if (day === 6) return 'text-blue-600';
+  if (day === 3) return 'text-amber-600';
+  if (day === 1) return 'text-emerald-600';
+  if (day === 2) return 'text-rose-600';
+  return 'text-brand-muted';
+}
+
+function getMonthLabel(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { month: 'short' });
+}
+
+function getDayNum(dateStr: string): number {
+  return new Date(dateStr + 'T12:00:00').getDate();
+}
+
+function getPercentageColor(pct: number): string {
+  if (pct >= 80) return 'text-emerald-600';
+  if (pct >= 60) return 'text-amber-600';
+  return 'text-red-600';
+}
+
+function getPercentageBg(pct: number): string {
+  if (pct >= 80) return 'bg-emerald-50';
+  if (pct >= 60) return 'bg-amber-50';
+  return 'bg-red-50';
+}
+
+const STATUS_COLORS: Record<string, { bg: string; ring: string; label: string }> = {
+  present: { bg: 'bg-emerald-500', ring: 'ring-emerald-300', label: 'P' },
+  late: { bg: 'bg-amber-400', ring: 'ring-amber-200', label: 'L' },
+  excused: { bg: 'bg-gray-400', ring: 'ring-gray-200', label: 'E' },
 };
 
-export default function StaffAttendancePage() {
-  const [areaFilter, setAreaFilter] = useState<AreaFilter>('all');
-  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
+function StatusCell({
+  status,
+  sessionId,
+  participantId,
+  onToggle,
+}: {
+  status: string | null;
+  sessionId: string;
+  participantId: string;
+  onToggle: (sessionId: string, participantId: string, currentStatus: string | null) => void;
+}) {
+  const config = status ? STATUS_COLORS[status] : null;
 
-  const { data, isLoading, error } = useQuery<{ sessions: SessionRow[] }>({
-    queryKey: ['staff-att-sessions'],
+  return (
+    <button
+      onClick={() => onToggle(sessionId, participantId, status)}
+      className="w-7 h-7 rounded-md flex items-center justify-center cursor-pointer transition-all hover:scale-110 hover:ring-2 hover:ring-offset-1 active:scale-95"
+      title={`Click to change (current: ${status || 'none'})`}
+    >
+      {config ? (
+        <span className={cn('w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white', config.bg, `hover:${config.ring}`)}>
+          {config.label}
+        </span>
+      ) : (
+        <span className="w-5 h-5 rounded-md bg-gray-100 border border-gray-200 border-dashed" />
+      )}
+    </button>
+  );
+}
+
+export default function StaffAttendancePage() {
+  const queryClient = useQueryClient();
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<'name' | 'percentage'>('name');
+  const [sortAsc, setSortAsc] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch groups — same endpoint as /admin/attendance
+  const { data: groupsData } = useQuery<{ groups: GroupOption[] }>({
+    queryKey: ['admin-groups-options'],
     queryFn: async () => {
-      const res = await fetch('/api/admin/sessions');
-      if (!res.ok) throw new Error('Failed to load sessions');
-      return res.json();
+      const res = await fetch('/api/admin/groups');
+      if (!res.ok) throw new Error('Failed to load groups');
+      const data = await res.json();
+      return {
+        groups: data.groups.map((g: { id: string; name: string; slug: string; area: string }) => ({
+          id: g.id, name: g.name, slug: g.slug, area: g.area,
+        })),
+      };
     },
   });
 
-  const sessions = data?.sessions ?? [];
+  const groups = groupsData?.groups ?? [];
+  const effectiveGroupId = selectedGroupId ?? groups[0]?.id ?? null;
 
-  const isPast = (date: string) => new Date(date + 'T23:59:59') < new Date();
+  // Fetch stats with ?role=staff so the API returns madrichim / mazkirut
+  // members of the group instead of chanichim.
+  const { data: statsData, isLoading, error } = useQuery<StatsResponse>({
+    queryKey: ['staff-attendance-stats', effectiveGroupId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/attendance/stats?group_id=${effectiveGroupId}&role=staff`);
+      if (!res.ok) throw new Error('Failed to load attendance');
+      return res.json();
+    },
+    enabled: !!effectiveGroupId,
+  });
 
-  // Group sessions by date
-  const dateGroups = useMemo(() => {
-    const filtered = areaFilter === 'all' ? sessions : sessions.filter((s) => s.groupArea === areaFilter);
-    const map = new Map<string, SessionRow[]>();
+  const sessions = statsData?.sessions ?? [];
+  const participants = statsData?.participants ?? [];
 
-    for (const s of filtered) {
-      if (s.isCancelled) continue;
-      if (!map.has(s.sessionDate)) map.set(s.sessionDate, []);
-      map.get(s.sessionDate)!.push(s);
-    }
-
-    const groups: DateGroup[] = [];
-    for (const [date, dateSessions] of map) {
-      const d = new Date(date + 'T12:00:00');
-      groups.push({
-        date,
-        dayLabel: d.toLocaleDateString('en-US', { weekday: 'long' }),
-        dayNum: d.getDate(),
-        monthLabel: d.toLocaleDateString('en-US', { month: 'short' }),
-        sessions: dateSessions.sort((a, b) => a.groupName.localeCompare(b.groupName)),
-        lockedStaffCount: dateSessions.filter((s) => s.isLockedStaff).length,
-        cancelledCount: dateSessions.filter((s) => s.isCancelled).length,
+  // Toggle attendance mutation — reuses the generic /api/admin/attendance/toggle
+  // endpoint which is role-agnostic.
+  const toggleMutation = useMutation({
+    mutationFn: async ({ sessionId, participantId, currentStatus }: { sessionId: string; participantId: string; currentStatus: string | null }) => {
+      const res = await fetch('/api/admin/attendance/toggle', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, participantId, currentStatus }),
       });
-    }
+      if (!res.ok) throw new Error('Failed to toggle attendance');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['staff-attendance-stats', effectiveGroupId] });
+    },
+  });
 
-    return groups.sort((a, b) => a.date.localeCompare(b.date));
-  }, [sessions, areaFilter]);
+  // Session cancel/restore mutation (same as /admin/attendance)
+  const sessionMutation = useMutation({
+    mutationFn: async ({ sessionId, isCancelled }: { sessionId: string; isCancelled: boolean }) => {
+      const res = await fetch('/api/admin/sessions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, is_cancelled: isCancelled }),
+      });
+      if (!res.ok) throw new Error('Failed to update session');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['staff-attendance-stats', effectiveGroupId] });
+      queryClient.invalidateQueries({ queryKey: ['admin-sessions'] });
+    },
+  });
 
-  // Split upcoming vs past, group by month
-  const { upcomingByMonth, pastByMonth } = useMemo(() => {
-    const upcoming: DateGroup[] = [];
-    const past: DateGroup[] = [];
-    for (const dg of dateGroups) {
-      if (isPast(dg.date)) past.push(dg);
-      else upcoming.push(dg);
-    }
+  const handleToggle = useCallback(
+    (sessionId: string, participantId: string, currentStatus: string | null) => {
+      toggleMutation.mutate({ sessionId, participantId, currentStatus });
+    },
+    [toggleMutation]
+  );
 
-    function groupByMonth(groups: DateGroup[]) {
-      const map = new Map<string, DateGroup[]>();
-      for (const dg of groups) {
-        const d = new Date(dg.date + 'T12:00:00');
-        const monthKey = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-        if (!map.has(monthKey)) map.set(monthKey, []);
-        map.get(monthKey)!.push(dg);
+  const sortedParticipants = useMemo(() => {
+    const list = [...participants];
+    const sortFn = (a: ParticipantStats, b: ParticipantStats) => {
+      if (sortBy === 'name') {
+        const cmp = a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName);
+        return sortAsc ? cmp : -cmp;
+      } else {
+        const cmp = a.stats.percentage - b.stats.percentage;
+        return sortAsc ? cmp : -cmp;
       }
-      return map;
-    }
-
-    return {
-      upcomingByMonth: groupByMonth(upcoming),
-      pastByMonth: groupByMonth(past.reverse()),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateGroups]);
+    list.sort(sortFn);
+    return list;
+  }, [participants, sortBy, sortAsc]);
 
-  function toggleDate(date: string) {
-    setExpandedDates((prev) => {
-      const next = new Set(prev);
-      if (next.has(date)) next.delete(date);
-      else next.add(date);
-      return next;
-    });
+  // Group columns by month for header
+  const columnsByMonth = useMemo(() => {
+    const byMonth: { month: string; columns: SessionHeader[] }[] = [];
+    let currentMonth = '';
+    for (const s of sessions) {
+      const month = getMonthLabel(s.date);
+      if (month !== currentMonth) {
+        byMonth.push({ month, columns: [s] });
+        currentMonth = month;
+      } else {
+        byMonth[byMonth.length - 1].columns.push(s);
+      }
+    }
+    return byMonth;
+  }, [sessions]);
+
+  // Track which columns are first in their month (for border)
+  const firstInMonth = useMemo(() => {
+    const set = new Set<number>();
+    for (const mg of columnsByMonth) {
+      const idx = sessions.indexOf(mg.columns[0]);
+      if (idx >= 0) set.add(idx);
+    }
+    return set;
+  }, [columnsByMonth, sessions]);
+
+  // Summary stats
+  const avgPercentage = participants.length > 0
+    ? Math.round(participants.reduce((s, p) => s + p.stats.percentage, 0) / participants.length)
+    : 0;
+
+  function toggleSort(field: 'name' | 'percentage') {
+    if (sortBy === field) setSortAsc(!sortAsc);
+    else { setSortBy(field); setSortAsc(field === 'name'); }
   }
 
-  function renderExpandedDate(dg: DateGroup) {
-    return (
-      <div className="ml-4 mt-1 mb-3 space-y-1 border-l-2 border-brand-navy/10 pl-4">
-        {dg.sessions.map((session) => (
-          <Link
-            key={session.id}
-            href={`/admin/madrich-attendance/session/${session.id}`}
-            className={cn(
-              'flex items-center justify-between px-3 py-2 rounded-md bg-white border transition-all hover:border-brand-navy/30 hover:shadow-sm cursor-pointer',
-              session.isLockedStaff && 'opacity-70'
-            )}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <Badge
-                className={cn(
-                  'text-xs border',
-                  GROUP_AREA_COLORS[session.groupArea] || 'bg-gray-100 text-gray-600 border-gray-200'
-                )}
-              >
-                {session.groupName}
-              </Badge>
-              {session.isLockedStaff && (
-                <span className="text-[10px] text-amber-600 font-medium inline-flex items-center gap-0.5">
-                  <Lock className="h-2.5 w-2.5" />
-                  LOCKED
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 text-brand-muted">
-              <ClipboardCheck className="h-4 w-4" />
-              <ChevronRight className="h-4 w-4" />
-            </div>
-          </Link>
-        ))}
-      </div>
-    );
+  // Per-session totals for the totals row
+  const sessionTotals = useMemo(() => {
+    const totals: Record<string, { present: number; total: number; pct: number }> = {};
+    for (const s of sessions) {
+      if (s.isCancelled || s.isFuture || !s.hasAttendance) continue;
+      let present = 0;
+      for (const p of participants) {
+        const status = p.records[s.id];
+        if (status === 'present' || status === 'late') present++;
+      }
+      const pct = participants.length > 0 ? Math.round((present / participants.length) * 100) : 0;
+      totals[s.id] = { present, total: participants.length, pct };
+    }
+    return totals;
+  }, [sessions, participants]);
+
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !effectiveGroupId) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('group_id', effectiveGroupId);
+      formData.append('role', 'staff');
+      const res = await fetch('/api/admin/attendance/import', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Import failed');
+      const skippedMsg = data.skipped?.length ? ` Skipped: ${data.skipped.join(', ')}.` : '';
+      setImportResult(`Imported ${data.imported} records from ${data.dateColumns} date columns.${skippedMsg}`);
+      queryClient.invalidateQueries({ queryKey: ['staff-attendance-stats', effectiveGroupId] });
+    } catch (err) {
+      setImportResult(`Error: ${err instanceof Error ? err.message : 'Import failed'}`);
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   }
+
+  const CELL_W = 32;
+  const NAME_W = 220;
+  const PCT_W = 56;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-brand-navy">Staff Attendance</h2>
           <p className="mt-1 text-sm text-brand-muted">
-            Take attendance for madrichim and mazkirut. Click a date to expand,
-            then click a group to mark.
+            Take attendance for madrichim and mazkirut. Click any cell to cycle: P → L → E → clear. Empty = absent.
           </p>
         </div>
-        <Link
-          href="/admin/madrich-attendance/upload"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-brand-dark-text shadow-sm hover:border-brand-navy/30 transition-all cursor-pointer"
-        >
-          <Upload className="h-4 w-4" />
-          Upload from Excel
-        </Link>
+        <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={handleImport}
+          />
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing || !effectiveGroupId}
+          >
+            {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            Import XLSX
+          </Button>
+        </div>
       </div>
 
-      {/* Area filter */}
-      <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm border border-gray-100 w-fit">
+      {importResult && (
+        <div className={cn(
+          'rounded-lg px-4 py-3 text-sm',
+          importResult.startsWith('Error') ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'
+        )}>
+          {importResult}
+        </div>
+      )}
+
+      {/* Group selector */}
+      <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm border border-gray-100 flex-wrap">
         <Filter className="ml-2 h-4 w-4 text-brand-muted" />
-        {AREA_TABS.map((tab) => (
+        {groups.map((g) => (
           <button
-            key={tab.key}
-            onClick={() => setAreaFilter(tab.key)}
+            key={g.id}
+            onClick={() => setSelectedGroupId(g.id)}
             className={cn(
               'rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer',
-              areaFilter === tab.key
+              effectiveGroupId === g.id
                 ? 'bg-brand-navy text-white shadow-sm'
                 : 'text-brand-muted hover:text-brand-dark-text hover:bg-gray-50'
             )}
           >
-            {tab.label}
+            {g.name}
           </button>
         ))}
       </div>
 
-      {/* Loading */}
+      {/* Summary cards */}
+      {!isLoading && !error && effectiveGroupId && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Card>
+            <CardContent className="flex items-center gap-3 py-4">
+              <Users className="h-5 w-5 text-brand-navy" />
+              <div>
+                <p className="text-2xl font-bold text-brand-dark-text">{participants.length}</p>
+                <p className="text-xs text-brand-muted">Madrichim + Mazkirut</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 py-4">
+              <ClipboardCheck className="h-5 w-5 text-blue-500" />
+              <div>
+                <p className="text-2xl font-bold text-brand-dark-text">{sessions.filter(s => !s.isCancelled).length}</p>
+                <p className="text-xs text-brand-muted">Active Sessions</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 py-4">
+              <TrendingUp className="h-5 w-5 text-emerald-500" />
+              <div>
+                <p className={cn('text-2xl font-bold', getPercentageColor(avgPercentage))}>{avgPercentage}%</p>
+                <p className="text-xs text-brand-muted">Avg Attendance</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {isLoading && (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-brand-navy" />
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <Card className="border-red-200 bg-red-50">
           <CardContent className="flex items-center gap-3 py-6">
             <AlertTriangle className="h-5 w-5 text-red-600" />
-            <p className="text-sm text-red-700">
-              {error instanceof Error ? error.message : 'Error'}
-            </p>
+            <p className="text-sm text-red-700">{error instanceof Error ? error.message : 'Error'}</p>
           </CardContent>
         </Card>
       )}
 
-      {/* Empty */}
-      {!isLoading && !error && sessions.length === 0 && (
+      {!isLoading && !error && effectiveGroupId && sessions.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
-            <Calendar className="h-12 w-12 text-brand-muted/40" />
-            <p className="mt-3 text-sm font-medium text-brand-muted">No sessions yet</p>
-            <p className="text-xs text-brand-muted mt-1">
-              Generate the season in /admin/sessions to create sessions
-            </p>
+            <ClipboardCheck className="h-12 w-12 text-brand-muted/40" />
+            <p className="mt-3 text-sm font-medium text-brand-muted">No sessions yet for this group</p>
+            <p className="text-xs text-brand-muted mt-1">Go to Sessions and click Generate Season</p>
           </CardContent>
         </Card>
       )}
 
-      {/* Upcoming */}
-      {!isLoading && !error && upcomingByMonth.size > 0 && (
-        <h3 className="text-sm font-bold text-brand-navy uppercase tracking-wider">
-          Upcoming Sessions
-        </h3>
+      {!isLoading && !error && sessions.length > 0 && participants.length === 0 && (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <Users className="h-12 w-12 text-brand-muted/40" />
+            <p className="mt-3 text-sm font-medium text-brand-muted">No madrichim or mazkirut assigned</p>
+            <p className="text-xs text-brand-muted mt-1">Add members to this group in Users</p>
+          </CardContent>
+        </Card>
       )}
-      {!isLoading &&
-        !error &&
-        Array.from(upcomingByMonth.entries()).map(([month, dates]) => (
-          <div key={month}>
-            <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">
-              {month}
-            </h3>
-            <div className="space-y-1.5">
-              {dates.map((dg) => {
-                const isExpanded = expandedDates.has(dg.date);
-                const allLocked = dg.lockedStaffCount === dg.sessions.length;
 
-                return (
-                  <div key={dg.date}>
-                    <div
-                      className={cn(
-                        'flex items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm',
-                        allLocked && 'opacity-60 bg-gray-50/50 border-gray-200',
-                        !allLocked && 'bg-white border-brand-navy/20 shadow-sm'
-                      )}
-                      onClick={() => toggleDate(dg.date)}
-                    >
-                      <div
-                        className={cn(
-                          'text-center w-12 flex-shrink-0 rounded-lg py-1',
-                          allLocked ? 'bg-gray-100' : 'bg-brand-navy text-white'
-                        )}
+      {/* Attendance grid */}
+      {!isLoading && !error && sessions.length > 0 && participants.length > 0 && (
+        <Card>
+          <CardContent className="py-4 px-0">
+            <div className="overflow-auto max-h-[calc(100vh-280px)]">
+              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + sessions.length * CELL_W}px` }}>
+                <thead className="sticky top-0 z-30 bg-white">
+                  {/* Month row */}
+                  <tr>
+                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
+                    <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
+                    {columnsByMonth.map((mg) => (
+                      <th
+                        key={mg.month}
+                        colSpan={mg.columns.length}
+                        className="text-center font-bold text-brand-navy text-xs pb-1 border-b-2 border-brand-navy/20"
                       >
-                        <p
-                          className={cn(
-                            'text-[10px] uppercase font-medium',
-                            allLocked ? 'text-gray-500' : 'text-white/70'
-                          )}
-                        >
-                          {dg.monthLabel}
-                        </p>
-                        <p
-                          className={cn(
-                            'text-lg font-bold',
-                            allLocked ? 'text-gray-500' : 'text-white'
-                          )}
-                        >
-                          {dg.dayNum}
-                        </p>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-brand-dark-text">
-                            {dg.dayLabel}
-                          </span>
-                          {dg.lockedStaffCount > 0 && (
-                            <Badge className="bg-amber-100 text-amber-700 text-[10px]">
-                              <Lock className="h-2.5 w-2.5 mr-0.5" />
-                              {dg.lockedStaffCount} locked
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {dg.sessions.map((s) => (
-                            <span
-                              key={s.id}
-                              className={cn(
-                                'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border',
-                                GROUP_AREA_COLORS[s.groupArea] ||
-                                  'bg-gray-100 text-gray-600 border-gray-200'
-                              )}
-                            >
-                              {s.groupName
-                                .replace('Katan - ', 'K')
-                                .replace('Noar - ', 'N')
-                                .replace(' Grade', '')}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <span className="text-brand-muted">
-                          {isExpanded ? (
-                            <ChevronDown className="h-4 w-4" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4" />
-                          )}
+                        {mg.month}
+                      </th>
+                    ))}
+                  </tr>
+                  {/* Day abbreviation row */}
+                  <tr>
+                    <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
+                    <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
+                    {sessions.map((s) => (
+                      <th key={s.id + '-day'} style={{ width: CELL_W }} className={cn(
+                        'text-center pb-0.5',
+                        s.isCancelled && 'bg-red-50/50',
+                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
+                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
+                      )}>
+                        <span className={cn(
+                          'text-[9px] font-bold',
+                          s.isCancelled ? 'text-red-300' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : getDayColor(s.date)
+                        )}>
+                          {getDayAbbr(s.date)}
                         </span>
-                      </div>
-                    </div>
-                    {isExpanded && renderExpandedDate(dg)}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-
-      {/* Past */}
-      {!isLoading && !error && pastByMonth.size > 0 && (
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mt-8">
-          Past Sessions
-        </h3>
-      )}
-      {!isLoading &&
-        !error &&
-        Array.from(pastByMonth.entries()).map(([month, dates]) => (
-          <div key={month}>
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
-              {month}
-            </h3>
-            <div className="space-y-1.5">
-              {dates.map((dg) => {
-                const isExpanded = expandedDates.has(dg.date);
-                const allLocked = dg.lockedStaffCount === dg.sessions.length;
-
-                return (
-                  <div key={dg.date}>
-                    <div
-                      className={cn(
-                        'flex items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm',
-                        allLocked && 'opacity-50 bg-gray-50/50 border-gray-200',
-                        !allLocked && 'bg-gray-50/60 border-gray-200 opacity-80'
-                      )}
-                      onClick={() => toggleDate(dg.date)}
+                      </th>
+                    ))}
+                  </tr>
+                  {/* Date number row */}
+                  <tr className="border-b-2 border-gray-200">
+                    <th
+                      style={{ minWidth: NAME_W }}
+                      className="sticky left-0 z-40 bg-white pb-2 pl-4 pr-2 text-left font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
+                      onClick={() => toggleSort('name')}
                     >
-                      <div className="text-center w-12 flex-shrink-0 rounded-lg py-1 bg-gray-100">
-                        <p className="text-[10px] uppercase font-medium text-gray-400">
-                          {dg.monthLabel}
-                        </p>
-                        <p className="text-lg font-bold text-gray-400">{dg.dayNum}</p>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-gray-500">
-                            {dg.dayLabel}
+                      <span className="inline-flex items-center gap-1">
+                        Name
+                        {sortBy === 'name' && (sortAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      style={{ minWidth: PCT_W }}
+                      className="sticky left-[220px] z-40 bg-white pb-2 px-1 text-center font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
+                      onClick={() => toggleSort('percentage')}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        %
+                        {sortBy === 'percentage' && (sortAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                      </span>
+                    </th>
+                    {sessions.map((s) => (
+                      <th key={s.id} style={{ width: CELL_W }} className={cn(
+                        'pb-2 text-center',
+                        s.isCancelled && 'bg-red-50/50',
+                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
+                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
+                      )}>
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span className={cn(
+                            'font-medium text-[10px]',
+                            s.isCancelled ? 'text-red-400 line-through' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : 'text-brand-muted'
+                          )}>
+                            {getDayNum(s.date)}
                           </span>
-                          {dg.lockedStaffCount > 0 && (
-                            <Badge className="bg-amber-100 text-amber-700 text-[10px]">
-                              <Lock className="h-2.5 w-2.5 mr-0.5" />
-                              {dg.lockedStaffCount} locked
-                            </Badge>
-                          )}
+                          <button
+                            onClick={() => sessionMutation.mutate({ sessionId: s.id, isCancelled: !s.isCancelled })}
+                            className={cn(
+                              'w-4 h-4 rounded flex items-center justify-center cursor-pointer transition-colors',
+                              s.isCancelled
+                                ? 'text-red-400 hover:text-emerald-500 hover:bg-emerald-50'
+                                : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
+                            )}
+                            title={s.isCancelled ? 'Restore session' : 'Cancel session'}
+                          >
+                            {s.isCancelled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                          </button>
                         </div>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {dg.sessions.map((s) => (
-                            <span
-                              key={s.id}
-                              className={cn(
-                                'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border',
-                                GROUP_AREA_COLORS[s.groupArea] ||
-                                  'bg-gray-100 text-gray-600 border-gray-200'
-                              )}
-                            >
-                              {s.groupName
-                                .replace('Katan - ', 'K')
-                                .replace('Noar - ', 'N')
-                                .replace(' Grade', '')}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <span className="text-brand-muted">
-                          {isExpanded ? (
-                            <ChevronDown className="h-4 w-4" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4" />
-                          )}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedParticipants.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors"
+                    >
+                      <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-white py-1 pl-4 pr-2 whitespace-nowrap">
+                        <span className="font-medium text-xs text-brand-dark-text truncate">
+                          {p.lastName}, {p.firstName}
                         </span>
-                      </div>
-                    </div>
-                    {isExpanded && renderExpandedDate(dg)}
-                  </div>
-                );
-              })}
+                      </td>
+                      <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-white py-1 px-1 text-center border-r-2 border-gray-200">
+                        <span className={cn(
+                          'inline-block px-1.5 py-0.5 rounded text-[10px] font-bold',
+                          getPercentageColor(p.stats.percentage),
+                          getPercentageBg(p.stats.percentage)
+                        )}>
+                          {p.stats.percentage}%
+                        </span>
+                      </td>
+                      {sessions.map((s, colIdx) => (
+                        <td key={s.id} style={{ width: CELL_W }} className={cn(
+                          'py-1 text-center',
+                          firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                          s.isCancelled && 'bg-red-50/30',
+                          s.isFuture && !s.isCancelled && 'bg-blue-50/30',
+                          !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/30'
+                        )}>
+                          {s.isCancelled ? (
+                            <span className="w-5 h-5 inline-block text-red-300" title="Cancelled">—</span>
+                          ) : s.isFuture ? (
+                            <span className="w-5 h-5 inline-block text-blue-200" title="Future">·</span>
+                          ) : (
+                            <StatusCell
+                              status={p.records[s.id]}
+                              sessionId={s.id}
+                              participantId={p.id}
+                              onToggle={handleToggle}
+                            />
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {/* Totals row */}
+                  <tr className="border-t-2 border-gray-300 bg-gray-50">
+                    <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-gray-50 py-2 pl-4 pr-2 whitespace-nowrap">
+                      <span className="font-bold text-xs text-brand-navy uppercase tracking-wider">Totals</span>
+                    </td>
+                    <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-gray-50 py-2 px-1 text-center border-r-2 border-gray-200" />
+                    {sessions.map((s, colIdx) => {
+                      const stats = sessionTotals[s.id];
+                      if (!stats) {
+                        return (
+                          <td key={s.id + '-total'} style={{ width: CELL_W }} className={cn(
+                            'py-2 text-center',
+                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                            s.isCancelled && 'bg-red-50/30',
+                            s.isFuture && 'bg-blue-50/30',
+                          )} />
+                        );
+                      }
+                      return (
+                        <td
+                          key={s.id + '-total'}
+                          style={{ width: CELL_W }}
+                          className={cn(
+                            'py-1 text-center',
+                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                          )}
+                          title={`${stats.present}/${stats.total} (${stats.pct}%)`}
+                        >
+                          <div className="flex flex-col items-center leading-tight">
+                            <span className="text-[9px] font-bold text-brand-dark-text">{stats.present}</span>
+                            <span className={cn(
+                              'text-[8px] font-semibold',
+                              getPercentageColor(stats.pct)
+                            )}>
+                              {stats.pct}%
+                            </span>
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
             </div>
-          </div>
-        ))}
+
+            {/* Legend */}
+            <div className="mt-4 pt-3 mx-4 border-t border-gray-100 flex items-center gap-4 text-xs text-brand-muted flex-wrap">
+              {Object.entries(STATUS_COLORS).map(([key, val]) => (
+                <span key={key} className="flex items-center gap-1">
+                  <span className={cn('w-4 h-4 rounded-md text-white text-[9px] font-bold flex items-center justify-center', val.bg)}>
+                    {val.label}
+                  </span>
+                  {key.charAt(0).toUpperCase() + key.slice(1)}
+                </span>
+              ))}
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-gray-100 border border-gray-200 border-dashed" />
+                Absent (no record)
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-amber-50 border border-amber-200 text-[9px]" />
+                No attendance taken
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-blue-50 border border-blue-200 text-blue-300 text-[9px] flex items-center justify-center">·</span>
+                Future
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-4 h-4 rounded-md bg-red-50 text-red-300 text-[9px] flex items-center justify-center">—</span>
+                Cancelled
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
