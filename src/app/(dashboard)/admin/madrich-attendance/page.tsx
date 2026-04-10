@@ -13,9 +13,12 @@ import {
   TrendingUp,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Upload,
   Ban,
   CheckCircle2,
+  Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -162,6 +165,8 @@ export default function StaffAttendancePage() {
   const [selectedArea, setSelectedArea] = useState<AreaKey>('som');
   const [sortBy, setSortBy] = useState<'name' | 'group' | 'percentage'>('name');
   const [sortAsc, setSortAsc] = useState(true);
+  const [mobileSelectedDate, setMobileSelectedDate] = useState<string | null>(null);
+  const [mobileSearch, setMobileSearch] = useState('');
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -189,15 +194,25 @@ export default function StaffAttendancePage() {
   const participants = data?.participants ?? [];
   const events = data?.events ?? [];
 
-  // Toggle attendance (generic endpoint — role-agnostic). Never locks
-  // anything for staff: we just cycle P → L → E → clear on any session,
-  // past or future, cancelled-or-not handled by the cell renderer below.
+  // Toggle attendance. Two modes:
+  //  - desktop grid: pass currentStatus, server cycles P → L → E → clear
+  //  - mobile view: pass an explicit nextStatus (set directly)
   const toggleMutation = useMutation({
-    mutationFn: async ({ sessionId, participantId, currentStatus }: { sessionId: string; participantId: string; currentStatus: Status | null }) => {
+    mutationFn: async ({
+      sessionId,
+      participantId,
+      currentStatus,
+      nextStatus,
+    }: {
+      sessionId: string;
+      participantId: string;
+      currentStatus?: Status | null;
+      nextStatus?: Status | null;
+    }) => {
       const res = await fetch('/api/admin/attendance/toggle', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, participantId, currentStatus }),
+        body: JSON.stringify({ sessionId, participantId, currentStatus, nextStatus }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -228,9 +243,20 @@ export default function StaffAttendancePage() {
     },
   });
 
+  // Desktop grid: cycle from current
   const handleToggle = useCallback(
     (sessionId: string, participantId: string, currentStatus: Status | null) => {
       toggleMutation.mutate({ sessionId, participantId, currentStatus });
+    },
+    [toggleMutation]
+  );
+
+  // Mobile view: set a status directly. If the user clicks a button that's
+  // already active, clear the cell.
+  const handleSetStatus = useCallback(
+    (sessionId: string, participantId: string, current: Status | null, target: Status) => {
+      const next = current === target ? null : target;
+      toggleMutation.mutate({ sessionId, participantId, nextStatus: next });
     },
     [toggleMutation]
   );
@@ -524,9 +550,243 @@ export default function StaffAttendancePage() {
         </Card>
       )}
 
-      {/* Grid */}
+      {/* Mobile view (small screens only) */}
       {!isLoading && !error && participants.length > 0 && dateColumns.length > 0 && (
-        <Card>
+        <div className="lg:hidden space-y-3">
+          {!mobileSelectedDate ? (
+            <Card>
+              <CardContent className="py-4 px-3 space-y-2">
+                <h3 className="text-sm font-bold text-brand-navy uppercase tracking-wider px-2">
+                  Pick a session
+                </h3>
+                {(() => {
+                  const past: DateColumn[] = [];
+                  const upcoming: DateColumn[] = [];
+                  for (const dc of dateColumns) {
+                    if (dc.isFuture) upcoming.push(dc);
+                    else past.push(dc);
+                  }
+                  // Past first (most recent), then upcoming
+                  past.reverse();
+                  return (
+                    <>
+                      {past.length > 0 && (
+                        <>
+                          <p className="text-[10px] font-semibold text-brand-muted uppercase tracking-wider mt-3 mb-1 px-2">
+                            Past
+                          </p>
+                          {past.map((dc) => {
+                            const d = new Date(dc.date + 'T12:00:00');
+                            const stats = dateTotals[dc.date];
+                            return (
+                              <button
+                                key={dc.date}
+                                onClick={() => {
+                                  setMobileSelectedDate(dc.date);
+                                  setMobileSearch('');
+                                }}
+                                className="w-full flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-3 text-left hover:border-brand-navy/30 hover:shadow-sm transition-all cursor-pointer"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="text-center w-12 flex-shrink-0 rounded-lg py-1 bg-gray-100">
+                                    <p className="text-[10px] uppercase font-medium text-gray-500">
+                                      {d.toLocaleDateString('en-US', { month: 'short' })}
+                                    </p>
+                                    <p className="text-lg font-bold text-gray-600">
+                                      {d.getDate()}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-semibold text-brand-dark-text">
+                                      {d.toLocaleDateString('en-US', { weekday: 'long' })}
+                                    </p>
+                                    {stats && (
+                                      <p className="text-xs text-brand-muted">
+                                        {stats.present}/{stats.total} present
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <ChevronRight className="h-5 w-5 text-brand-muted" />
+                              </button>
+                            );
+                          })}
+                        </>
+                      )}
+                      {upcoming.length > 0 && (
+                        <>
+                          <p className="text-[10px] font-semibold text-brand-muted uppercase tracking-wider mt-3 mb-1 px-2">
+                            Upcoming
+                          </p>
+                          {upcoming.map((dc) => {
+                            const d = new Date(dc.date + 'T12:00:00');
+                            return (
+                              <button
+                                key={dc.date}
+                                onClick={() => {
+                                  setMobileSelectedDate(dc.date);
+                                  setMobileSearch('');
+                                }}
+                                className="w-full flex items-center justify-between rounded-lg border border-brand-navy/20 bg-white px-3 py-3 text-left shadow-sm hover:border-brand-navy/40 hover:shadow-md transition-all cursor-pointer"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="text-center w-12 flex-shrink-0 rounded-lg py-1 bg-brand-navy text-white">
+                                    <p className="text-[10px] uppercase font-medium text-white/70">
+                                      {d.toLocaleDateString('en-US', { month: 'short' })}
+                                    </p>
+                                    <p className="text-lg font-bold">{d.getDate()}</p>
+                                  </div>
+                                  <p className="text-sm font-semibold text-brand-dark-text">
+                                    {d.toLocaleDateString('en-US', { weekday: 'long' })}
+                                  </p>
+                                </div>
+                                <ChevronRight className="h-5 w-5 text-brand-muted" />
+                              </button>
+                            );
+                          })}
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          ) : (
+            (() => {
+              const col = dateColumns.find((c) => c.date === mobileSelectedDate);
+              if (!col) {
+                setMobileSelectedDate(null);
+                return null;
+              }
+              const d = new Date(col.date + 'T12:00:00');
+              const visibleMembers = sortedParticipants
+                .filter((p) => getMemberSessionForDate(p, col) !== null)
+                .filter((p) => {
+                  if (!mobileSearch) return true;
+                  const q = mobileSearch.toLowerCase();
+                  return (
+                    p.firstName.toLowerCase().includes(q) ||
+                    p.lastName.toLowerCase().includes(q)
+                  );
+                });
+              return (
+                <Card>
+                  <CardContent className="py-4 px-3 space-y-3">
+                    <button
+                      onClick={() => setMobileSelectedDate(null)}
+                      className="flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark-text transition-colors"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      Back to dates
+                    </button>
+
+                    <div className="rounded-xl bg-gradient-to-br from-brand-navy to-brand-navy/80 p-4 text-white">
+                      <p className="text-xs text-white/70 uppercase tracking-wider">
+                        {AREA_TABS.find((t) => t.key === selectedArea)?.label}
+                      </p>
+                      <p className="text-lg font-bold">
+                        {d.toLocaleDateString('en-US', {
+                          weekday: 'long',
+                          month: 'long',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })}
+                      </p>
+                      <p className="text-xs text-white/70 mt-1">
+                        {visibleMembers.length} staff member{visibleMembers.length === 1 ? '' : 's'}
+                      </p>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
+                      <input
+                        type="text"
+                        placeholder="Search staff..."
+                        value={mobileSearch}
+                        onChange={(e) => setMobileSearch(e.target.value)}
+                        className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
+                      />
+                    </div>
+
+                    <div className="divide-y divide-gray-100 rounded-lg border border-gray-100">
+                      {visibleMembers.length === 0 ? (
+                        <p className="py-6 text-center text-sm text-brand-muted">
+                          No staff have a session on this date.
+                        </p>
+                      ) : (
+                        visibleMembers.map((p) => {
+                          const session = getMemberSessionForDate(p, col)!;
+                          const current = (p.records[session.id] as Status | undefined) ?? null;
+                          if (session.isCancelled) {
+                            return (
+                              <div
+                                key={p.id}
+                                className="flex items-center justify-between py-3 px-3 opacity-60"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-brand-dark-text truncate">
+                                    {p.firstName} {p.lastName}
+                                  </p>
+                                  <p className="text-xs text-brand-muted truncate">
+                                    {p.primaryGroupName ?? '—'}
+                                  </p>
+                                </div>
+                                <span className="text-xs text-red-500 font-medium">CANCELLED</span>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div
+                              key={p.id}
+                              className="flex items-center justify-between py-3 px-3"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-brand-dark-text truncate">
+                                  {p.firstName} {p.lastName}
+                                </p>
+                                <p className="text-xs text-brand-muted truncate">
+                                  {p.primaryGroupName ?? '—'}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                {(['present', 'late', 'excused'] as Status[]).map((s) => {
+                                  const isOn = current === s;
+                                  const cfg = STATUS_COLORS[s];
+                                  return (
+                                    <button
+                                      key={s}
+                                      onClick={() =>
+                                        handleSetStatus(session.id, p.id, current, s)
+                                      }
+                                      className={cn(
+                                        'w-9 h-9 rounded-md flex items-center justify-center text-xs font-bold transition-all',
+                                        isOn
+                                          ? `${cfg.bg} text-white shadow`
+                                          : 'bg-gray-100 text-brand-muted hover:bg-gray-200'
+                                      )}
+                                      title={s}
+                                    >
+                                      {cfg.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })()
+          )}
+        </div>
+      )}
+
+      {/* Grid (desktop only) */}
+      {!isLoading && !error && participants.length > 0 && dateColumns.length > 0 && (
+        <Card className="hidden lg:block">
           <CardContent className="py-4 px-0">
             <div className="overflow-auto max-h-[calc(100vh-280px)]">
               <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + GROUP_W + PCT_W + dateColumns.length * CELL_W}px` }}>

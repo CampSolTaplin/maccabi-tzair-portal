@@ -1,28 +1,67 @@
 'use client';
 
-import { useProfile } from '@/lib/hooks/use-profile';
+import { useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 import {
   ClipboardCheck,
-  Users,
-  TrendingUp,
-  CalendarDays,
+  Cake,
   ArrowRight,
+  Loader2,
 } from 'lucide-react';
-import Link from 'next/link';
+import { useProfile } from '@/lib/hooks/use-profile';
+import { cn } from '@/lib/utils/cn';
+
+interface BirthdayRow {
+  id: string;
+  firstName: string;
+  lastName: string;
+  birthdate: string;
+  daysUntil: number;
+  turningAge: number;
+  groupName: string | null;
+}
+
+function formatBirthdate(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function daysLabel(daysUntil: number): string {
+  if (daysUntil === 0) return 'Today';
+  if (daysUntil === 1) return 'Tomorrow';
+  return `in ${daysUntil} days`;
+}
+
+function daysBadgeClasses(daysUntil: number): string {
+  if (daysUntil === 0) return 'bg-brand-coral text-white';
+  if (daysUntil <= 7) return 'bg-amber-100 text-amber-700';
+  return 'bg-brand-navy/10 text-brand-navy';
+}
 
 export default function MadrichDashboardPage() {
   const { profile } = useProfile();
 
+  const { data: birthdaysData, isLoading } = useQuery<{ birthdays: BirthdayRow[] }>({
+    queryKey: ['madrich-birthdays'],
+    queryFn: async () => {
+      const res = await fetch('/api/madrich/birthdays');
+      if (!res.ok) throw new Error('Failed to load birthdays');
+      return res.json();
+    },
+  });
+
+  const birthdays = birthdaysData?.birthdays ?? [];
+
   return (
     <div className="space-y-6">
-      {/* Welcome Card */}
+      {/* Welcome */}
       <div className="rounded-2xl bg-gradient-to-br from-brand-navy to-brand-navy/80 p-6 text-white shadow-md md:p-8">
         <h2 className="text-2xl font-bold md:text-3xl">
           Shalom, {profile?.first_name ?? 'Madrich'}!
         </h2>
         <p className="mt-2 text-white/80">
-          Ready to make an impact? Manage your group attendance and track your
-          members&apos; progress from here.
+          Ready to make an impact? Manage your group attendance and keep an eye
+          on your chanichim&apos;s birthdays from here.
         </p>
       </div>
 
@@ -43,70 +82,66 @@ export default function MadrichDashboardPage() {
         <ArrowRight className="h-6 w-6 transition-transform group-hover:translate-x-1" />
       </Link>
 
-      {/* Group Overview Stats */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-xl bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-brand-navy/10 p-3">
-              <Users className="h-6 w-6 text-brand-navy" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-brand-muted">Group Members</p>
-              <p className="text-2xl font-bold text-brand-dark-text">18</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-emerald-50 p-3">
-              <TrendingUp className="h-6 w-6 text-emerald-600" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-brand-muted">Avg Attendance</p>
-              <p className="text-2xl font-bold text-brand-dark-text">82%</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-amber-50 p-3">
-              <CalendarDays className="h-6 w-6 text-amber-600" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-brand-muted">Sessions This Month</p>
-              <p className="text-2xl font-bold text-brand-dark-text">4</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Sessions */}
+      {/* Upcoming birthdays */}
       <div className="rounded-xl bg-white p-6 shadow-sm">
-        <h3 className="mb-4 text-lg font-semibold text-brand-navy">Recent Sessions</h3>
-        <div className="space-y-3">
-          {[
-            { date: 'Mar 15, 2026', present: 16, total: 18, rate: '89%' },
-            { date: 'Mar 8, 2026', present: 14, total: 18, rate: '78%' },
-            { date: 'Mar 1, 2026', present: 15, total: 18, rate: '83%' },
-          ].map((session, i) => (
-            <div
-              key={i}
-              className="flex items-center justify-between rounded-lg border border-gray-100 p-4"
-            >
-              <div>
-                <p className="font-medium text-brand-dark-text">{session.date}</p>
-                <p className="text-sm text-brand-muted">
-                  {session.present} of {session.total} present
-                </p>
-              </div>
-              <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
-                {session.rate}
-              </span>
-            </div>
-          ))}
+        <div className="flex items-center gap-2 mb-4">
+          <div className="rounded-lg bg-brand-coral/10 p-2">
+            <Cake className="h-5 w-5 text-brand-coral" />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-brand-navy">
+              Upcoming Birthdays
+            </h3>
+            <p className="text-xs text-brand-muted">
+              Next 30 days — chanichim in your group(s)
+            </p>
+          </div>
         </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-brand-navy" />
+          </div>
+        ) : birthdays.length === 0 ? (
+          <div className="py-6 text-center">
+            <p className="text-sm text-brand-muted">
+              No upcoming birthdays in the next 30 days.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {birthdays.map((b) => (
+              <div
+                key={b.id}
+                className="flex items-center justify-between rounded-lg border border-gray-100 px-4 py-3 transition-colors hover:bg-gray-50"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-brand-coral/10 text-brand-coral font-bold text-sm">
+                    {b.firstName[0]}
+                    {b.lastName[0]}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-brand-dark-text truncate">
+                      {b.firstName} {b.lastName}
+                    </p>
+                    <p className="text-xs text-brand-muted">
+                      {formatBirthdate(b.birthdate)} · turning {b.turningAge}
+                      {b.groupName ? ` · ${b.groupName}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    'flex-shrink-0 rounded-full px-3 py-1 text-xs font-semibold',
+                    daysBadgeClasses(b.daysUntil)
+                  )}
+                >
+                  {daysLabel(b.daysUntil)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

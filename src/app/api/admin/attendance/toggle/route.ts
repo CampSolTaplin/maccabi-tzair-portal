@@ -3,10 +3,13 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 // Cycle: null → present → late → excused → null (no absent — absence is implicit)
 const STATUS_CYCLE = ['present', 'late', 'excused', null] as const;
+const VALID_STATUSES = new Set([...STATUS_CYCLE]);
 
 export async function PATCH(request: NextRequest) {
   try {
-    const { sessionId, participantId, currentStatus } = await request.json();
+    const body = await request.json();
+    const { sessionId, participantId, currentStatus } = body;
+    const explicitNext = body.nextStatus;
 
     if (!sessionId || !participantId) {
       return NextResponse.json({ error: 'sessionId and participantId are required' }, { status: 400 });
@@ -14,9 +17,19 @@ export async function PATCH(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Find next status in cycle
-    const currentIdx = STATUS_CYCLE.indexOf(currentStatus ?? null);
-    const nextStatus = STATUS_CYCLE[(currentIdx + 1) % STATUS_CYCLE.length];
+    // If the caller passed an explicit nextStatus, honor it (used by the
+    // mobile staff-attendance view where each P/L/E button sets a value
+    // directly instead of cycling). Otherwise fall back to the cycle.
+    let nextStatus: 'present' | 'late' | 'excused' | null;
+    if (explicitNext !== undefined) {
+      if (explicitNext !== null && !VALID_STATUSES.has(explicitNext)) {
+        return NextResponse.json({ error: 'Invalid nextStatus' }, { status: 400 });
+      }
+      nextStatus = explicitNext;
+    } else {
+      const currentIdx = STATUS_CYCLE.indexOf(currentStatus ?? null);
+      nextStatus = STATUS_CYCLE[(currentIdx + 1) % STATUS_CYCLE.length];
+    }
 
     if (nextStatus === null) {
       // Remove the record
