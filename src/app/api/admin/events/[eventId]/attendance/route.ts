@@ -25,22 +25,26 @@ export async function GET(
       return NextResponse.json({ participants: [] });
     }
 
-    // 2. Get all participants from those groups
+    // 2. Get all members from those groups — participants AND staff
+    // (madrichim / mazkirut). Staff members whose groups are linked to an
+    // event should be counted as attending by default; the admin can still
+    // untoggle them individually.
     const { data: memberships, error: memError } = await supabase
       .from('group_memberships')
       .select(`
         profile_id,
         group_id,
+        role,
         profiles:profile_id (
-          id, first_name, last_name
+          id, first_name, last_name, role
         )
       `)
       .in('group_id', groupIds)
       .eq('is_active', true)
-      .eq('role', 'participant');
+      .in('role', ['participant', 'madrich', 'mazkirut']);
 
     if (memError) {
-      throw new Error(`Failed to fetch participants: ${memError.message}`);
+      throw new Error(`Failed to fetch members: ${memError.message}`);
     }
 
     // 3. Get existing attendance records for this event
@@ -58,12 +62,15 @@ export async function GET(
       attendanceMap.set(rec.participant_id, rec.attended);
     }
 
-    // 4. Deduplicate participants (might be in multiple groups)
+    // 4. Deduplicate members (might be in multiple groups) and resolve their
+    //    default attended state: participants default to null (unknown),
+    //    staff default to true ("attending unless untoggled").
     const seen = new Set<string>();
     const participants: Array<{
       id: string;
       firstName: string;
       lastName: string;
+      role: 'participant' | 'madrich' | 'mazkirut';
       attended: boolean | null;
     }> = [];
 
@@ -72,16 +79,28 @@ export async function GET(
         id: string;
         first_name: string;
         last_name: string;
+        role: string;
       } | null;
 
       if (!p || seen.has(p.id)) continue;
       seen.add(p.id);
 
+      const membershipRole = (m.role as string) ?? p.role;
+      const isStaff = membershipRole === 'madrich' || membershipRole === 'mazkirut';
+
+      let attended: boolean | null;
+      if (attendanceMap.has(p.id)) {
+        attended = attendanceMap.get(p.id)!;
+      } else {
+        attended = isStaff ? true : null;
+      }
+
       participants.push({
         id: p.id,
         firstName: p.first_name,
         lastName: p.last_name,
-        attended: attendanceMap.has(p.id) ? attendanceMap.get(p.id)! : null,
+        role: (isStaff ? membershipRole : 'participant') as 'participant' | 'madrich' | 'mazkirut',
+        attended,
       });
     }
 

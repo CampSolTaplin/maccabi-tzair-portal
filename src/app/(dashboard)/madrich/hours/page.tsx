@@ -19,10 +19,12 @@ interface HoursResponse {
     sessions: number;
     hours: number;
   }>;
+  events: Array<{ id: string; name: string; date: string; hours: number }>;
   breakdown: {
     saturdays: { count: number; hours: number };
     weekdays: { count: number; hours: number };
     lateSessions: { count: number; hours: number };
+    eventTotal: number;
     grandTotal: number;
   };
 }
@@ -135,6 +137,31 @@ export default function MyHoursPage() {
             counted at the late rate.
           </CardContent>
         </Card>
+      )}
+
+      {data.events.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">
+            Special events
+          </h3>
+          <div className="rounded-xl bg-white shadow-sm divide-y divide-gray-100">
+            {data.events.map((ev) => (
+              <div key={ev.id} className="flex items-center justify-between py-3 px-4">
+                <div>
+                  <p className="font-medium text-brand-dark-text">{ev.name}</p>
+                  <p className="text-xs text-brand-muted mt-0.5">
+                    {new Date(ev.date + 'T12:00:00').toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </p>
+                </div>
+                <span className="font-semibold text-brand-dark-text">{ev.hours}h</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Per-group breakdown */}
@@ -282,7 +309,8 @@ function buildLetterHTML(data: HoursResponse): string {
     <div class="breakdown">
       ${breakdown.saturdays.count > 0 ? `• <strong>${breakdown.saturdays.count}</strong> Saturday sessions = <strong>${breakdown.saturdays.hours} hours</strong><br>` : ''}
       ${breakdown.weekdays.count > 0 ? `• <strong>${breakdown.weekdays.count}</strong> Weekday sessions = <strong>${breakdown.weekdays.hours} hours</strong><br>` : ''}
-      ${breakdown.lateSessions.count > 0 ? `• <strong>${breakdown.lateSessions.count}</strong> Late arrivals = <strong>${breakdown.lateSessions.hours} hours</strong>` : ''}
+      ${breakdown.lateSessions.count > 0 ? `• <strong>${breakdown.lateSessions.count}</strong> Late arrivals = <strong>${breakdown.lateSessions.hours} hours</strong><br>` : ''}
+      ${data.events.map((e) => `• ${e.name}: <strong>${e.hours} hours</strong>`).join('<br>')}
     </div>
 
     <p class="body-text">

@@ -96,9 +96,29 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Coordinator: filter groups to only those they coordinate
+    // Coordinator: filter groups to only those they coordinate. Any
+    // coordinator that covers at least one non-planning group in the area
+    // also implicitly gets the matching planning group (SOM Planning for
+    // SOM coordinators, Staff Planning for Katan/Noar/Pre-SOM
+    // coordinators). That way an SOM coordinator also marks the Monday
+    // planning sessions without needing a separate coordinator row.
     if (auth.groupIds) {
       const authorized = new Set(auth.groupIds);
+
+      const nonPlanningInArea = areaGroups.filter(
+        (g) => !PLANNING_SLUGS.has(g.slug)
+      );
+      const planningInArea = areaGroups.filter((g) =>
+        PLANNING_SLUGS.has(g.slug)
+      );
+
+      const coversNonPlanning = nonPlanningInArea.some((g) =>
+        authorized.has(g.id)
+      );
+      if (coversNonPlanning) {
+        for (const g of planningInArea) authorized.add(g.id);
+      }
+
       areaGroups = areaGroups.filter((g) => authorized.has(g.id));
     }
 

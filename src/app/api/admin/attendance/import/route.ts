@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthContext } from '@/lib/supabase/auth-helpers';
+
+const PLANNING_SLUGS = new Set(['som-planning', 'staff-planning']);
 
 interface AreaConfig {
   areas?: string[];
@@ -228,6 +231,13 @@ export async function POST(request: NextRequest) {
 
     const supabase = createAdminClient();
 
+    // Auth + coordinator filtering — the import can only target groups
+    // the caller is entitled to see.
+    const auth = await getAuthContext(supabase);
+    if ('error' in auth) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
+
     // ─── Resolve the group set we're importing into ───
     // For group_id path: single group.
     // For area path: all groups in the area (including the relevant planning group).
@@ -263,8 +273,27 @@ export async function POST(request: NextRequest) {
           if (!areaGroups.some((g) => g.id === e.id)) areaGroups.push(e);
         }
       }
+
+      // Coordinator filter: same expansion logic as staff-by-area so a
+      // coordinator of SOM also lands in SOM Planning when importing.
+      if (auth.groupIds) {
+        const authorized = new Set(auth.groupIds);
+        const coversNonPlanning = areaGroups.some(
+          (g) => authorized.has(g.id) && !PLANNING_SLUGS.has(g.slug)
+        );
+        if (coversNonPlanning) {
+          for (const g of areaGroups) {
+            if (PLANNING_SLUGS.has(g.slug)) authorized.add(g.id);
+          }
+        }
+        areaGroups = areaGroups.filter((g) => authorized.has(g.id));
+      }
+
       targetGroupIds = areaGroups.map((g) => g.id);
     } else if (groupId) {
+      if (auth.groupIds && !auth.groupIds.includes(groupId)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
       targetGroupIds = [groupId];
     }
 

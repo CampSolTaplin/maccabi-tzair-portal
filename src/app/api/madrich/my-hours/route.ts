@@ -154,7 +154,51 @@ export async function GET() {
     perGroup.set(session.group_id, existing);
   }
 
-  const grandTotal = saturdayHours + weekdayHours + lateHours;
+  // ─── Events linked to the madrich's groups ───
+  // A madrich is considered attending any event their group is linked to
+  // unless there's an explicit event_attendance row with attended = false.
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const eventsAttended: Array<{ id: string; name: string; date: string; hours: number }> = [];
+  let eventTotal = 0;
+
+  const { data: linkedEvents } = await admin
+    .from('event_groups')
+    .select('event_id')
+    .in('group_id', groupIds);
+  const eventIds = Array.from(new Set((linkedEvents ?? []).map((e) => e.event_id)));
+
+  if (eventIds.length > 0) {
+    const { data: eventRows } = await admin
+      .from('events')
+      .select('id, name, event_date, real_hours')
+      .in('id', eventIds)
+      .lte('event_date', todayDate)
+      .order('event_date');
+
+    const { data: myEventMarks } = await admin
+      .from('event_attendance')
+      .select('event_id, attended')
+      .eq('participant_id', user.id)
+      .in('event_id', eventIds);
+    const markByEvent = new Map<string, boolean>();
+    for (const r of myEventMarks ?? []) markByEvent.set(r.event_id, r.attended);
+
+    for (const ev of eventRows ?? []) {
+      // Default: attending unless explicitly false
+      const attended = markByEvent.has(ev.id) ? markByEvent.get(ev.id)! : true;
+      if (!attended) continue;
+      const hours = Number(ev.real_hours ?? 0);
+      eventsAttended.push({
+        id: ev.id,
+        name: ev.name,
+        date: ev.event_date,
+        hours,
+      });
+      eventTotal += hours;
+    }
+  }
+
+  const grandTotal = saturdayHours + weekdayHours + lateHours + eventTotal;
 
   return NextResponse.json({
     profile: {
@@ -170,10 +214,12 @@ export async function GET() {
       sessions: perGroup.get(g.id)?.sessions ?? 0,
       hours: perGroup.get(g.id)?.hours ?? 0,
     })),
+    events: eventsAttended,
     breakdown: {
       saturdays: { count: saturdayCount, hours: saturdayHours },
       weekdays: { count: weekdayCount, hours: weekdayHours },
       lateSessions: { count: lateCount, hours: lateHours },
+      eventTotal,
       grandTotal,
     },
   });
