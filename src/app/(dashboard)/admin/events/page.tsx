@@ -55,6 +55,7 @@ interface Participant {
   id: string;
   firstName: string;
   lastName: string;
+  role: 'participant' | 'madrich' | 'mazkirut';
   attended: boolean | null;
 }
 
@@ -310,62 +311,85 @@ function AttendancePanel({ eventId }: { eventId: string }) {
     );
   }
 
-  const participants = data?.participants ?? [];
-  const attendedCount = participants.filter((p) => p.attended === true).length;
+  const allMembers = data?.participants ?? [];
+  const staffMembers = allMembers.filter((p) => p.role === 'madrich' || p.role === 'mazkirut');
+  const chanichim = allMembers.filter((p) => p.role === 'participant');
+  const attendedCount = allMembers.filter((p) => p.attended === true).length;
 
-  if (participants.length === 0) {
+  if (allMembers.length === 0) {
     return (
       <div className="py-4 px-2 text-sm text-brand-muted">
-        No participants found for the assigned groups.
+        No members found for the assigned groups.
       </div>
     );
   }
 
+  function renderButton(p: Participant) {
+    const isAttended = p.attended === true;
+    return (
+      <button
+        key={p.id}
+        type="button"
+        onClick={() =>
+          toggleMutation.mutate({
+            participantId: p.id,
+            attended: !isAttended,
+          })
+        }
+        disabled={toggleMutation.isPending}
+        className={cn(
+          'flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-left transition-colors cursor-pointer',
+          isAttended
+            ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+            : 'bg-gray-50 text-brand-dark-text hover:bg-gray-100'
+        )}
+      >
+        <span
+          className={cn(
+            'flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center transition-colors',
+            isAttended
+              ? 'bg-emerald-500 border-emerald-500 text-white'
+              : 'border-gray-300 bg-white'
+          )}
+        >
+          {isAttended && <Check className="h-3 w-3" />}
+        </span>
+        <span className="truncate">
+          {p.lastName}, {p.firstName}
+        </span>
+      </button>
+    );
+  }
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-4">
       <div className="flex items-center justify-between px-1">
         <span className="text-xs font-medium text-brand-muted">
-          {attendedCount}/{participants.length} attended
+          {attendedCount}/{allMembers.length} attended
         </span>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
-        {participants.map((p) => {
-          const isAttended = p.attended === true;
-          return (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() =>
-                toggleMutation.mutate({
-                  participantId: p.id,
-                  attended: !isAttended,
-                })
-              }
-              disabled={toggleMutation.isPending}
-              className={cn(
-                'flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-left transition-colors cursor-pointer',
-                isAttended
-                  ? 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                  : 'bg-gray-50 text-brand-dark-text hover:bg-gray-100'
-              )}
-            >
-              <span
-                className={cn(
-                  'flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center transition-colors',
-                  isAttended
-                    ? 'bg-emerald-500 border-emerald-500 text-white'
-                    : 'border-gray-300 bg-white'
-                )}
-              >
-                {isAttended && <Check className="h-3 w-3" />}
-              </span>
-              <span className="truncate">
-                {p.lastName}, {p.firstName}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+
+      {staffMembers.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold text-brand-muted uppercase tracking-wider px-1">
+            Staff ({staffMembers.length})
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
+            {staffMembers.map(renderButton)}
+          </div>
+        </div>
+      )}
+
+      {chanichim.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold text-brand-muted uppercase tracking-wider px-1">
+            Chanichim ({chanichim.length})
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
+            {chanichim.map(renderButton)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

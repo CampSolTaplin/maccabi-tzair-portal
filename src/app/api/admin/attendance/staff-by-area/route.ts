@@ -151,14 +151,21 @@ export async function GET(request: NextRequest) {
     if (memErr) throw new Error(memErr.message);
 
     // ─── 4. Attendance records for those sessions ───
+    // Chunk in small batches and pass .limit(10000) so we don't silently
+    // hit Supabase's default 1000-row cap. With say 9 staff members ×
+    // 200 sessions per chunk = up to 1800 rows per query — enough to
+    // blow the default limit and truncate the response, which on the
+    // client looks like other people's marks mysteriously "disappearing"
+    // when you click a cell.
     const records: Array<{ session_id: string; participant_id: string; status: string }> = [];
     if (sessionIds.length > 0) {
-      for (let i = 0; i < sessionIds.length; i += 200) {
-        const chunk = sessionIds.slice(i, i + 200);
+      for (let i = 0; i < sessionIds.length; i += 50) {
+        const chunk = sessionIds.slice(i, i + 50);
         const { data } = await supabase
           .from('attendance_records')
           .select('session_id, participant_id, status')
-          .in('session_id', chunk);
+          .in('session_id', chunk)
+          .limit(10000);
         records.push(...(data ?? []));
       }
     }
