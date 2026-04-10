@@ -21,6 +21,10 @@ async function isMfaTrusted(
   }
 }
 
+function mustChangePassword(user: { user_metadata?: Record<string, unknown> } | null): boolean {
+  return user?.user_metadata?.must_change_password === true;
+}
+
 const ROLE_ROUTES: Record<string, string> = {
   admin: '/admin',
   coordinator: '/admin',
@@ -70,11 +74,25 @@ export async function middleware(request: NextRequest) {
             }
           }
 
+          // MFA passed (or not required) → if still on default password,
+          // force change before landing on any dashboard.
+          if (mustChangePassword(user)) {
+            return NextResponse.redirect(new URL('/change-password', request.url));
+          }
+
           return NextResponse.redirect(new URL(dest, request.url));
         }
       } catch {
         // If anything fails, just show login page
       }
+    }
+    return supabaseResponse;
+  }
+
+  // ─── /change-password: require auth, otherwise allow access ───
+  if (path.startsWith('/change-password')) {
+    if (!user) {
+      return NextResponse.redirect(new URL('/login', request.url));
     }
     return supabaseResponse;
   }
@@ -91,7 +109,11 @@ export async function middleware(request: NextRequest) {
           }
           // Trusted device → fall through and redirect to dashboard
         }
-        // MFA done or not required — redirect to dashboard
+        // MFA done or not required — force password change if still on default
+        if (mustChangePassword(user)) {
+          return NextResponse.redirect(new URL('/change-password', request.url));
+        }
+        // Otherwise redirect to dashboard
         const { data: profile } = await supabase
           .from('profiles')
           .select('role')
@@ -147,6 +169,12 @@ export async function middleware(request: NextRequest) {
         return NextResponse.redirect(new URL('/mfa-verify', request.url));
       }
     }
+  }
+
+  // ─── Force password change on first login ───
+  // Runs after the admin MFA check so admins still complete MFA first.
+  if (mustChangePassword(user)) {
+    return NextResponse.redirect(new URL('/change-password', request.url));
   }
 
   // ─── Role-based route protection ───

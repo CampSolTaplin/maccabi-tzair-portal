@@ -18,6 +18,7 @@ const supabase = createClient(
 );
 
 const PRE_SOM_SLUG = 'pre-som';
+const DEFAULT_PASSWORD = 'M@rjcc2026';
 
 const MAZKIRUT = [
   { first: 'Dan',        last: 'Berlagosky',    phone: '9543837014' },
@@ -36,13 +37,6 @@ function normalizeUSPhone(input) {
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
   return null;
-}
-
-function generatePassword(lastName) {
-  const prefix = 'Mtz';
-  const part = lastName.replace(/[^a-zA-Z]/g, '').slice(0, 3).toLowerCase();
-  const digits = String(Math.floor(1000 + Math.random() * 9000));
-  return `${prefix}${part}${digits}!`;
 }
 
 function syntheticEmail() {
@@ -94,16 +88,16 @@ async function main() {
 
     // 2. Create auth user with a synthetic email
     const email = syntheticEmail();
-    const password = generatePassword(person.last);
 
     const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
       email,
-      password,
+      password: DEFAULT_PASSWORD,
       email_confirm: true,
       user_metadata: {
         role: 'mazkirut',
         first_name: person.first,
         last_name: person.last,
+        must_change_password: true,
       },
     });
 
@@ -153,8 +147,8 @@ async function main() {
       continue;
     }
 
-    console.log(`✅ ${label} — ${phone} — ${password}`);
-    created.push({ name: label, phone, password });
+    console.log(`✅ ${label} — ${phone}`);
+    created.push({ name: label, phone });
   }
 
   // Summary
@@ -164,13 +158,12 @@ async function main() {
   console.log(`Failed:  ${failed.length}`);
 
   if (created.length > 0) {
-    console.log('\n========= CREDENTIALS (share with each person privately) =========');
-    console.log('Name                            Phone              Password');
-    console.log('----------------------------------------------------------------');
+    console.log(`\nAll new users share the default password: ${DEFAULT_PASSWORD}`);
+    console.log('They will be prompted to change it on first login.\n');
+    console.log('Name                            Phone');
+    console.log('-------------------------------------------------');
     for (const r of created) {
-      console.log(
-        `${r.name.padEnd(32)}${r.phone.padEnd(18)}${r.password}`
-      );
+      console.log(`${r.name.padEnd(32)}${r.phone}`);
     }
   }
 

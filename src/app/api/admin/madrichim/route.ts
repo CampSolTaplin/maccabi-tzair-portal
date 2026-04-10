@@ -2,15 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { normalizeUSPhone } from '@/lib/auth/phone';
-
-/* ─── Helpers ─── */
-
-function generatePassword(lastName: string): string {
-  const prefix = 'Mtz';
-  const lastNamePart = lastName.replace(/[^a-zA-Z]/g, '').slice(0, 3).toLowerCase();
-  const digits = String(Math.floor(1000 + Math.random() * 9000));
-  return `${prefix}${lastNamePart}${digits}!`;
-}
+import { DEFAULT_PASSWORD } from '@/lib/auth/default-password';
 
 async function requireAdmin(supabase: ReturnType<typeof createAdminClient>) {
   const authClient = await createClient();
@@ -241,7 +233,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const password = generatePassword(lastName);
+    const password = DEFAULT_PASSWORD;
 
     // We don't use Supabase's Phone provider (it requires Twilio), so every
     // user is created with an email — either the real one if provided, or a
@@ -258,6 +250,7 @@ export async function POST(request: NextRequest) {
         role: userRole,
         first_name: firstName,
         last_name: lastName,
+        must_change_password: true,
       },
     });
 
@@ -553,7 +546,7 @@ export async function PATCH(request: NextRequest) {
             .select('last_name, role, first_name')
             .eq('id', profileId)
             .single();
-          const generated = generatePassword(currentProfile.data?.last_name ?? 'user');
+          const generated = DEFAULT_PASSWORD;
           const syntheticEmail = `phone-${Math.random().toString(36).slice(2, 12)}@mtz.local`;
           const { error: createError } = await supabase.auth.admin.createUser({
             id: profileId,
@@ -564,6 +557,7 @@ export async function PATCH(request: NextRequest) {
               role: currentProfile.data?.role ?? 'madrich',
               first_name: currentProfile.data?.first_name ?? '',
               last_name: currentProfile.data?.last_name ?? '',
+              must_change_password: true,
             },
           });
           if (createError) {
@@ -616,7 +610,7 @@ export async function PATCH(request: NextRequest) {
             .eq('id', profileId)
             .single();
 
-          const password = generatePassword(currentProfile.data?.last_name ?? 'user');
+          const password = DEFAULT_PASSWORD;
 
           const { error: createError } = await supabase.auth.admin.createUser({
             id: profileId,
@@ -627,6 +621,7 @@ export async function PATCH(request: NextRequest) {
               role: currentProfile.data?.role ?? 'madrich',
               first_name: firstName ?? undefined,
               last_name: lastName ?? undefined,
+              must_change_password: true,
             },
           });
 
@@ -680,28 +675,34 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (action === 'reset_password') {
-      // Get user profile for last name to generate password
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('last_name')
-        .eq('id', profileId)
-        .single();
-
-      if (!profile) {
+      // Reset the user to the shared default password and force them to
+      // change it on their next login (via the must_change_password flag
+      // in user_metadata, which the middleware enforces).
+      const { data: authUser, error: getError } =
+        await supabase.auth.admin.getUserById(profileId);
+      if (getError || !authUser?.user) {
         return NextResponse.json({ error: 'User not found' }, { status: 404 });
       }
 
-      const newPassword = generatePassword(profile.last_name);
+      const mergedMetadata = {
+        ...(authUser.user.user_metadata ?? {}),
+        must_change_password: true,
+      };
 
       const { error: updateError } = await supabase.auth.admin.updateUserById(profileId, {
-        password: newPassword,
+        password: DEFAULT_PASSWORD,
+        user_metadata: mergedMetadata,
       });
 
       if (updateError) {
         throw new Error(`Failed to reset password: ${updateError.message}`);
       }
 
-      return NextResponse.json({ success: true, action: 'password_reset', generatedPassword: newPassword });
+      return NextResponse.json({
+        success: true,
+        action: 'password_reset',
+        generatedPassword: DEFAULT_PASSWORD,
+      });
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

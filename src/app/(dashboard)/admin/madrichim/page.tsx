@@ -863,7 +863,7 @@ export default function AdminUsersPage() {
                 <p className="font-semibold text-emerald-800">User created!</p>
                 <div className="flex items-center gap-2 mt-1">
                   <p className="text-emerald-700">
-                    Temporary password: <code className="font-mono bg-white px-2 py-0.5 rounded">{createdPassword}</code>
+                    Default password: <code className="font-mono bg-white px-2 py-0.5 rounded">{createdPassword}</code>
                   </p>
                   <button
                     onClick={handleCopyPassword}
@@ -877,6 +877,9 @@ export default function AdminUsersPage() {
                     )}
                   </button>
                 </div>
+                <p className="mt-1.5 text-xs text-emerald-700/80">
+                  The user will be asked to choose a new password on their first login.
+                </p>
               </div>
             )}
           </CardContent>
