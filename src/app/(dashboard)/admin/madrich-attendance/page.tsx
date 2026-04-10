@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +20,7 @@ import {
   Loader2,
   Search,
   Users,
+  Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
@@ -294,6 +296,18 @@ export default function MadrichAttendancePage() {
           </div>
           <p className="text-white/70">{groupDetail?.group.name ?? '…'}</p>
         </div>
+
+        {selectedGroupId && (
+          <div className="flex items-center justify-end">
+            <Link
+              href={`/admin/madrich-attendance/upload?groupId=${selectedGroupId}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-brand-muted shadow-sm hover:border-brand-navy/30 hover:text-brand-dark-text transition-all cursor-pointer"
+            >
+              <Upload className="h-4 w-4" />
+              Upload from Excel
+            </Link>
+          </div>
+        )}
 
         {loadingGroup ? (
           <div className="flex items-center justify-center py-12">

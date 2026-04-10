@@ -68,11 +68,13 @@ const NAV_ITEMS: Record<UserRole, NavItem[]> = {
   madrich: [
     { label: 'My Group', href: '/madrich', icon: LayoutDashboard },
     { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck },
+    { label: 'My Hours', href: '/madrich/hours', icon: Clock },
     { label: 'Group Stats', href: '/madrich/stats', icon: BarChart3, disabled: true },
   ],
   mazkirut: [
     { label: 'My Group', href: '/madrich', icon: LayoutDashboard },
     { label: 'Take Attendance', href: '/madrich/take-attendance', icon: ClipboardCheck },
+    { label: 'My Hours', href: '/madrich/hours', icon: Clock },
     { label: 'Group Stats', href: '/madrich/stats', icon: BarChart3, disabled: true },
   ],
   participant: [
