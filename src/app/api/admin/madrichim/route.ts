@@ -3,8 +3,6 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { normalizeUSPhone } from '@/lib/auth/phone';
 
-const PHONE_LOGIN_ROLES = new Set(['madrich', 'mazkirut']);
-
 /* ─── Helpers ─── */
 
 function generatePassword(lastName: string): string {
@@ -212,12 +210,6 @@ export async function POST(request: NextRequest) {
 
     let normalizedPhone: string | null = null;
     if (typeof phone === 'string' && phone.trim().length > 0) {
-      if (!PHONE_LOGIN_ROLES.has(userRole)) {
-        return NextResponse.json(
-          { error: 'Phone login is only available for madrich and mazkirut roles' },
-          { status: 400 }
-        );
-      }
       normalizedPhone = normalizeUSPhone(phone);
       if (!normalizedPhone) {
         return NextResponse.json(
@@ -515,24 +507,12 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (action === 'update_profile') {
-      // Normalize and validate the phone if provided. Phone login is only
-      // allowed for madrich and mazkirut.
+      // Normalize and validate the phone if provided.
       let phoneForProfile: string | null | undefined;
       if (typeof phone === 'string') {
         if (phone.trim().length === 0) {
           phoneForProfile = null; // explicit clear
         } else {
-          const { data: targetProfile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', profileId)
-            .single();
-          if (!targetProfile || !PHONE_LOGIN_ROLES.has(targetProfile.role)) {
-            return NextResponse.json(
-              { error: 'Phone login is only available for madrich and mazkirut roles' },
-              { status: 400 }
-            );
-          }
           const normalized = normalizeUSPhone(phone);
           if (!normalized) {
             return NextResponse.json(

@@ -11,9 +11,8 @@ import { normalizeUSPhone } from '@/lib/auth/phone';
  * form translate the phone the user typed back into the email Supabase
  * is expecting.
  *
- * We only resolve madrich and mazkirut profiles (the only roles that
- * have phone login enabled) and we always return a generic 404 on
- * miss to avoid leaking which phones are registered.
+ * All roles are eligible for phone login. We always return a generic 404
+ * on miss to avoid leaking which phones are registered.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -36,7 +35,6 @@ export async function POST(request: NextRequest) {
       .from('profiles')
       .select('id, role')
       .or(`phone.eq.${normalized},phone.eq.${tenDigit}`)
-      .in('role', ['madrich', 'mazkirut'])
       .limit(1)
       .maybeSingle();
 

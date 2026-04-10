@@ -251,13 +251,12 @@ export default function AdminUsersPage() {
 
   function handleCreate() {
     if (!newFirst || !newLast) return;
-    const allowsPhone = newRole === 'madrich' || newRole === 'mazkirut';
-    if (!newEmail && !(allowsPhone && newPhone)) return;
+    if (!newEmail && !newPhone) return;
     if (newRole === 'coordinator' || newRole === 'mazkirut') {
       if (newGroupIds.length === 0) return;
       createMutation.mutate({
         email: newEmail,
-        phone: allowsPhone ? newPhone : undefined,
+        phone: newPhone,
         firstName: newFirst,
         lastName: newLast,
         role: newRole,
@@ -276,6 +275,7 @@ export default function AdminUsersPage() {
     } else {
       createMutation.mutate({
         email: newEmail,
+        phone: newPhone,
         firstName: newFirst,
         lastName: newLast,
         role: newRole,
@@ -336,8 +336,7 @@ export default function AdminUsersPage() {
 
   const needsGroup = newRole === 'madrich';
   const needsMultiGroup = newRole === 'coordinator' || newRole === 'mazkirut';
-  const allowsPhoneLogin = newRole === 'madrich' || newRole === 'mazkirut';
-  const hasIdentifier = !!newEmail || (allowsPhoneLogin && !!newPhone);
+  const hasIdentifier = !!newEmail || !!newPhone;
   const canCreate = newFirst && newLast && hasIdentifier && (
     newRole === 'admin' ||
     (newRole === 'madrich' && newGroupId) ||
@@ -773,22 +772,20 @@ export default function AdminUsersPage() {
                 className={inputClass}
               />
               <input
-                placeholder={allowsPhoneLogin ? 'Email (optional if phone given)' : 'Email'}
+                placeholder="Email (optional if phone given)"
                 type="email"
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
                 className={inputClass}
               />
-              {allowsPhoneLogin && (
-                <input
-                  placeholder="Phone (e.g. (305) 555-1234)"
-                  type="tel"
-                  inputMode="tel"
-                  value={newPhone}
-                  onChange={(e) => setNewPhone(e.target.value)}
-                  className={inputClass}
-                />
-              )}
+              <input
+                placeholder="Phone (e.g. (305) 555-1234)"
+                type="tel"
+                inputMode="tel"
+                value={newPhone}
+                onChange={(e) => setNewPhone(e.target.value)}
+                className={inputClass}
+              />
               <select
                 value={newRole}
                 onChange={(e) => {
