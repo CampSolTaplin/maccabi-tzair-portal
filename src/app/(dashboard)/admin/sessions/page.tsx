@@ -98,6 +98,11 @@ export default function AdminSessionsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-sessions'] });
+      // Cross-invalidate staff attendance + chanichim attendance views so
+      // cancelled sessions show up as cancelled there too without waiting
+      // for the user to refresh.
+      queryClient.invalidateQueries({ queryKey: ['staff-by-area'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-attendance-stats'] });
     },
   });
 
@@ -112,6 +117,8 @@ export default function AdminSessionsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['staff-by-area'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-attendance-stats'] });
     },
   });
 

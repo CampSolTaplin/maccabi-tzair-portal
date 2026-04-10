@@ -168,12 +168,20 @@ export default function StaffAttendancePage() {
       }
       return res.json();
     },
+    // Always refetch on mount — if the user cancels or un-cancels a session
+    // on /admin/sessions, we want the staff attendance view to pick up the
+    // change the next time they come here without waiting for the default
+    // staleTime to expire.
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   const sessions = data?.sessions ?? [];
   const participants = data?.participants ?? [];
 
-  // Toggle attendance (generic endpoint — role-agnostic)
+  // Toggle attendance (generic endpoint — role-agnostic). Never locks
+  // anything for staff: we just cycle P → L → E → clear on any session,
+  // past or future, cancelled-or-not handled by the cell renderer below.
   const toggleMutation = useMutation({
     mutationFn: async ({ sessionId, participantId, currentStatus }: { sessionId: string; participantId: string; currentStatus: Status | null }) => {
       const res = await fetch('/api/admin/attendance/toggle', {
@@ -181,11 +189,17 @@ export default function StaffAttendancePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, participantId, currentStatus }),
       });
-      if (!res.ok) throw new Error('Failed to toggle');
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || 'Failed to toggle');
+      }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['staff-by-area', selectedArea] });
+    },
+    onError: (err) => {
+      setImportResult(`Error: ${err instanceof Error ? err.message : 'Toggle failed'}`);
     },
   });
 
@@ -657,15 +671,16 @@ export default function StaffAttendancePage() {
                             className={cn(
                               'py-1 text-center',
                               firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
-                              session.isCancelled && 'bg-red-50/30',
-                              col.isFuture && !session.isCancelled && 'bg-blue-50/30'
+                              session.isCancelled && 'bg-red-50/30'
                             )}
                           >
                             {session.isCancelled ? (
-                              <span className="text-red-300">—</span>
-                            ) : col.isFuture ? (
-                              <span className="text-blue-200">·</span>
+                              <span className="text-red-300" title="Session cancelled">—</span>
                             ) : (
+                              // No future-gate and no lock-gate for staff.
+                              // Staff attendance is always editable so the
+                              // coordinator can enter historical data or
+                              // correct past marks at any time.
                               <StatusCell
                                 status={(p.records[session.id] as Status | undefined) ?? null}
                                 sessionId={session.id}
@@ -737,8 +752,8 @@ export default function StaffAttendancePage() {
                 No session for this member
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-4 h-4 rounded-md bg-blue-50 border border-blue-200 text-blue-300 text-[9px] flex items-center justify-center">·</span>
-                Future
+                <span className="w-4 h-4 rounded-md bg-red-50 flex items-center justify-center text-red-300 text-[10px]">—</span>
+                Cancelled
               </span>
             </div>
           </CardContent>
