@@ -1,587 +1,434 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import {
   Calendar,
-  ClipboardCheck,
-  ChevronLeft,
-  ChevronRight,
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-  XCircle,
-  Lock,
-  Unlock,
+  AlertTriangle,
   Loader2,
-  Search,
-  Users,
+  Lock,
+  Filter,
+  ChevronDown,
+  ChevronRight,
   Upload,
+  ClipboardCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
-type Status = 'present' | 'late' | 'excused' | 'absent';
-
-interface GroupOption {
-  id: string;
-  name: string;
-  slug: string;
-  area: string | null;
-}
-
-interface StaffMember {
-  id: string;
-  firstName: string;
-  lastName: string;
-  role: 'madrich' | 'mazkirut';
-}
-
 interface SessionRow {
   id: string;
+  groupId: string;
+  groupName: string;
+  groupSlug: string;
+  groupArea: string;
   sessionDate: string;
   sessionType: string;
   title: string | null;
+  isCancelled: boolean;
   isLocked: boolean;
   isLockedStaff: boolean;
+  hoursPresent: number;
+  hoursLate: number;
+  attendanceCount: number;
 }
 
-interface GroupDetail {
-  group: GroupOption;
-  members: StaffMember[];
+interface DateGroup {
+  date: string;
+  dayLabel: string;
+  dayNum: number;
+  monthLabel: string;
   sessions: SessionRow[];
+  lockedStaffCount: number;
+  cancelledCount: number;
 }
 
-interface SessionMarks {
-  sessionId: string;
-  isLockedStaff: boolean;
-  isCancelled: boolean;
-  marks: Record<string, Status>;
-}
+const AREA_TABS = [
+  { key: 'all', label: 'All Groups' },
+  { key: 'katan', label: 'Katan' },
+  { key: 'noar', label: 'Noar' },
+  { key: 'leadership', label: 'Leadership' },
+] as const;
 
-const STATUS_CONFIG: { value: Status; icon: typeof CheckCircle2; label: string; color: string; bg: string }[] = [
-  { value: 'present', icon: CheckCircle2, label: 'Present', color: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200' },
-  { value: 'late', icon: Clock, label: 'Late', color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200' },
-  { value: 'excused', icon: AlertCircle, label: 'Excused', color: 'text-gray-500', bg: 'bg-gray-50 border-gray-200' },
-  { value: 'absent', icon: XCircle, label: 'Absent', color: 'text-red-600', bg: 'bg-red-50 border-red-200' },
-];
+type AreaFilter = (typeof AREA_TABS)[number]['key'];
 
-function formatSessionDate(dateStr: string): string {
-  const d = new Date(dateStr + 'T12:00:00');
-  return d.toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
+const GROUP_AREA_COLORS: Record<string, string> = {
+  katan: 'bg-blue-100 text-blue-700 border-blue-200',
+  noar: 'bg-purple-100 text-purple-700 border-purple-200',
+  leadership: 'bg-amber-100 text-amber-700 border-amber-200',
+};
 
-function formatShortDate(dateStr: string): string {
-  const d = new Date(dateStr + 'T12:00:00');
-  return d.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-}
+export default function StaffAttendancePage() {
+  const [areaFilter, setAreaFilter] = useState<AreaFilter>('all');
+  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
 
-function isToday(dateStr: string): boolean {
-  const today = new Date();
-  const d = new Date(dateStr + 'T12:00:00');
-  return (
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate()
-  );
-}
-
-export default function MadrichAttendancePage() {
-  const queryClient = useQueryClient();
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [saving, setSaving] = useState<Record<string, boolean>>({});
-  const [locking, setLocking] = useState(false);
-
-  // List of groups the caller can manage
-  const { data: groupsData, isLoading: loadingGroups } = useQuery<{
-    groups: GroupOption[];
-  }>({
-    queryKey: ['staff-att-groups'],
+  const { data, isLoading, error } = useQuery<{ sessions: SessionRow[] }>({
+    queryKey: ['staff-att-sessions'],
     queryFn: async () => {
-      const res = await fetch('/api/admin/madrich-attendance/groups');
-      if (!res.ok) throw new Error('Failed to load groups');
+      const res = await fetch('/api/admin/sessions');
+      if (!res.ok) throw new Error('Failed to load sessions');
       return res.json();
     },
   });
 
-  const groups = groupsData?.groups ?? [];
+  const sessions = data?.sessions ?? [];
 
-  // Group detail (members + sessions) for the selected group
-  const { data: groupDetail, isLoading: loadingGroup } = useQuery<GroupDetail>({
-    queryKey: ['staff-att-group', selectedGroupId],
-    queryFn: async () => {
-      const res = await fetch(`/api/admin/madrich-attendance/${selectedGroupId}`);
-      if (!res.ok) throw new Error('Failed to load group');
-      return res.json();
-    },
-    enabled: !!selectedGroupId,
-  });
+  const isPast = (date: string) => new Date(date + 'T23:59:59') < new Date();
 
-  // Session marks for the selected session
-  const { data: sessionMarks, refetch: refetchMarks } = useQuery<SessionMarks>({
-    queryKey: ['staff-att-marks', selectedSessionId],
-    queryFn: async () => {
-      const res = await fetch(`/api/admin/madrich-attendance/session/${selectedSessionId}`);
-      if (!res.ok) throw new Error('Failed to load session marks');
-      return res.json();
-    },
-    enabled: !!selectedSessionId,
-  });
+  // Group sessions by date
+  const dateGroups = useMemo(() => {
+    const filtered = areaFilter === 'all' ? sessions : sessions.filter((s) => s.groupArea === areaFilter);
+    const map = new Map<string, SessionRow[]>();
 
-  // Local optimistic copy of marks so the UI updates instantly as the user clicks.
-  const [localMarks, setLocalMarks] = useState<Record<string, Status>>({});
-  useEffect(() => {
-    if (sessionMarks?.marks) {
-      setLocalMarks(sessionMarks.marks);
+    for (const s of filtered) {
+      if (s.isCancelled) continue;
+      if (!map.has(s.sessionDate)) map.set(s.sessionDate, []);
+      map.get(s.sessionDate)!.push(s);
     }
-  }, [sessionMarks?.marks]);
 
-  const markMember = useCallback(
-    async (profileId: string, nextStatus: Status) => {
-      if (!selectedSessionId || sessionMarks?.isLockedStaff) return;
-      const previous = localMarks[profileId];
-      setLocalMarks((m) => ({ ...m, [profileId]: nextStatus }));
-      setSaving((s) => ({ ...s, [profileId]: true }));
-      try {
-        const res = await fetch(
-          `/api/admin/madrich-attendance/session/${selectedSessionId}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ profileId, status: nextStatus }),
-          }
-        );
-        if (!res.ok) throw new Error('save failed');
-      } catch {
-        // Revert on failure
-        setLocalMarks((m) => {
-          const next = { ...m };
-          if (previous === undefined) delete next[profileId];
-          else next[profileId] = previous;
-          return next;
-        });
-      } finally {
-        setSaving((s) => {
-          const next = { ...s };
-          delete next[profileId];
-          return next;
-        });
+    const groups: DateGroup[] = [];
+    for (const [date, dateSessions] of map) {
+      const d = new Date(date + 'T12:00:00');
+      groups.push({
+        date,
+        dayLabel: d.toLocaleDateString('en-US', { weekday: 'long' }),
+        dayNum: d.getDate(),
+        monthLabel: d.toLocaleDateString('en-US', { month: 'short' }),
+        sessions: dateSessions.sort((a, b) => a.groupName.localeCompare(b.groupName)),
+        lockedStaffCount: dateSessions.filter((s) => s.isLockedStaff).length,
+        cancelledCount: dateSessions.filter((s) => s.isCancelled).length,
+      });
+    }
+
+    return groups.sort((a, b) => a.date.localeCompare(b.date));
+  }, [sessions, areaFilter]);
+
+  // Split upcoming vs past, group by month
+  const { upcomingByMonth, pastByMonth } = useMemo(() => {
+    const upcoming: DateGroup[] = [];
+    const past: DateGroup[] = [];
+    for (const dg of dateGroups) {
+      if (isPast(dg.date)) past.push(dg);
+      else upcoming.push(dg);
+    }
+
+    function groupByMonth(groups: DateGroup[]) {
+      const map = new Map<string, DateGroup[]>();
+      for (const dg of groups) {
+        const d = new Date(dg.date + 'T12:00:00');
+        const monthKey = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        if (!map.has(monthKey)) map.set(monthKey, []);
+        map.get(monthKey)!.push(dg);
       }
-    },
-    [selectedSessionId, sessionMarks?.isLockedStaff, localMarks]
-  );
-
-  async function handleLock(lock: boolean) {
-    if (!selectedSessionId) return;
-    setLocking(true);
-    try {
-      const res = await fetch(
-        `/api/admin/madrich-attendance/session/${selectedSessionId}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: lock ? 'lock' : 'unlock' }),
-        }
-      );
-      if (!res.ok) throw new Error('lock failed');
-      await refetchMarks();
-      queryClient.invalidateQueries({ queryKey: ['staff-att-group', selectedGroupId] });
-    } finally {
-      setLocking(false);
+      return map;
     }
+
+    return {
+      upcomingByMonth: groupByMonth(upcoming),
+      pastByMonth: groupByMonth(past.reverse()),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateGroups]);
+
+  function toggleDate(date: string) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(date)) next.delete(date);
+      else next.add(date);
+      return next;
+    });
   }
 
-  const members = groupDetail?.members ?? [];
-  const sessions = groupDetail?.sessions ?? [];
-
-  const filteredMembers = useMemo(
-    () =>
-      members.filter((m) =>
-        `${m.firstName} ${m.lastName}`.toLowerCase().includes(search.toLowerCase())
-      ),
-    [members, search]
-  );
-
-  const markedCount = useMemo(
-    () => members.filter((m) => localMarks[m.id] !== undefined).length,
-    [members, localMarks]
-  );
-
-  const openSessions = sessions.filter((s) => !s.isLockedStaff);
-  const lockedSessions = sessions.filter((s) => s.isLockedStaff);
-
-  // ───────────────────────── Group picker ─────────────────────────
-  if (!selectedGroupId) {
+  function renderExpandedDate(dg: DateGroup) {
     return (
-      <div className="space-y-6">
+      <div className="ml-4 mt-1 mb-3 space-y-1 border-l-2 border-brand-navy/10 pl-4">
+        {dg.sessions.map((session) => (
+          <Link
+            key={session.id}
+            href={`/admin/madrich-attendance/session/${session.id}`}
+            className={cn(
+              'flex items-center justify-between px-3 py-2 rounded-md bg-white border transition-all hover:border-brand-navy/30 hover:shadow-sm cursor-pointer',
+              session.isLockedStaff && 'opacity-70'
+            )}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Badge
+                className={cn(
+                  'text-xs border',
+                  GROUP_AREA_COLORS[session.groupArea] || 'bg-gray-100 text-gray-600 border-gray-200'
+                )}
+              >
+                {session.groupName}
+              </Badge>
+              {session.isLockedStaff && (
+                <span className="text-[10px] text-amber-600 font-medium inline-flex items-center gap-0.5">
+                  <Lock className="h-2.5 w-2.5" />
+                  LOCKED
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-brand-muted">
+              <ClipboardCheck className="h-4 w-4" />
+              <ChevronRight className="h-4 w-4" />
+            </div>
+          </Link>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between">
         <div>
           <h2 className="text-2xl font-bold text-brand-navy">Staff Attendance</h2>
           <p className="mt-1 text-sm text-brand-muted">
-            Take attendance for madrichim and mazkirut. Pick a group to start.
+            Take attendance for madrichim and mazkirut. Click a date to expand,
+            then click a group to mark.
           </p>
         </div>
-
-        {loadingGroups ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-brand-navy" />
-          </div>
-        ) : groups.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <Users className="h-12 w-12 text-brand-muted/40" />
-              <p className="mt-3 text-sm text-brand-muted">
-                You don&apos;t coordinate any groups.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {groups.map((g) => (
-              <button
-                key={g.id}
-                onClick={() => {
-                  setSelectedGroupId(g.id);
-                  setSelectedSessionId(null);
-                  setSearch('');
-                }}
-                className="flex items-center justify-between rounded-xl border border-gray-200 bg-white p-4 text-left shadow-sm transition-all hover:border-brand-navy/30 hover:shadow-md cursor-pointer"
-              >
-                <div>
-                  <p className="font-semibold text-brand-dark-text">{g.name}</p>
-                  {g.area && (
-                    <p className="text-xs text-brand-muted uppercase tracking-wider mt-0.5">
-                      {g.area}
-                    </p>
-                  )}
-                </div>
-                <ChevronRight className="h-5 w-5 text-brand-muted" />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ───────────────────────── Session picker ─────────────────────────
-  if (!selectedSessionId) {
-    return (
-      <div className="mx-auto max-w-2xl space-y-6">
-        <button
-          onClick={() => setSelectedGroupId(null)}
-          className="flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark-text transition-colors cursor-pointer"
+        <Link
+          href="/admin/madrich-attendance/upload"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-brand-dark-text shadow-sm hover:border-brand-navy/30 transition-all cursor-pointer"
         >
-          <ChevronLeft className="h-4 w-4" />
-          Back to groups
-        </button>
+          <Upload className="h-4 w-4" />
+          Upload from Excel
+        </Link>
+      </div>
 
-        <div className="rounded-2xl bg-gradient-to-br from-brand-navy to-brand-navy/80 p-6 text-white shadow-md">
-          <div className="flex items-center gap-3 mb-1">
-            <Calendar className="h-7 w-7" />
-            <h1 className="text-2xl font-bold">Staff Attendance</h1>
-          </div>
-          <p className="text-white/70">{groupDetail?.group.name ?? '…'}</p>
+      {/* Area filter */}
+      <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm border border-gray-100 w-fit">
+        <Filter className="ml-2 h-4 w-4 text-brand-muted" />
+        {AREA_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setAreaFilter(tab.key)}
+            className={cn(
+              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer',
+              areaFilter === tab.key
+                ? 'bg-brand-navy text-white shadow-sm'
+                : 'text-brand-muted hover:text-brand-dark-text hover:bg-gray-50'
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Loading */}
+      {isLoading && (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-brand-navy" />
         </div>
+      )}
 
-        {selectedGroupId && (
-          <div className="flex items-center justify-end">
-            <Link
-              href={`/admin/madrich-attendance/upload?groupId=${selectedGroupId}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-brand-muted shadow-sm hover:border-brand-navy/30 hover:text-brand-dark-text transition-all cursor-pointer"
-            >
-              <Upload className="h-4 w-4" />
-              Upload from Excel
-            </Link>
-          </div>
-        )}
+      {/* Error */}
+      {error && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="flex items-center gap-3 py-6">
+            <AlertTriangle className="h-5 w-5 text-red-600" />
+            <p className="text-sm text-red-700">
+              {error instanceof Error ? error.message : 'Error'}
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
-        {loadingGroup ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-brand-navy" />
-          </div>
-        ) : members.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <Users className="h-12 w-12 text-brand-muted/40" />
-              <p className="mt-3 text-sm font-medium text-brand-muted">
-                No madrichim or mazkirut in this group
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <>
-            {openSessions.length > 0 && (
-              <div>
-                <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-2">
-                  Open Sessions
-                </h3>
-                <div className="space-y-2">
-                  {openSessions.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => setSelectedSessionId(s.id)}
+      {/* Empty */}
+      {!isLoading && !error && sessions.length === 0 && (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <Calendar className="h-12 w-12 text-brand-muted/40" />
+            <p className="mt-3 text-sm font-medium text-brand-muted">No sessions yet</p>
+            <p className="text-xs text-brand-muted mt-1">
+              Generate the season in /admin/sessions to create sessions
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Upcoming */}
+      {!isLoading && !error && upcomingByMonth.size > 0 && (
+        <h3 className="text-sm font-bold text-brand-navy uppercase tracking-wider">
+          Upcoming Sessions
+        </h3>
+      )}
+      {!isLoading &&
+        !error &&
+        Array.from(upcomingByMonth.entries()).map(([month, dates]) => (
+          <div key={month}>
+            <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-3">
+              {month}
+            </h3>
+            <div className="space-y-1.5">
+              {dates.map((dg) => {
+                const isExpanded = expandedDates.has(dg.date);
+                const allLocked = dg.lockedStaffCount === dg.sessions.length;
+
+                return (
+                  <div key={dg.date}>
+                    <div
                       className={cn(
-                        'w-full flex items-center justify-between rounded-xl bg-white border p-4 shadow-sm transition-all hover:shadow-md hover:border-brand-navy/30 cursor-pointer text-left',
-                        isToday(s.sessionDate) && 'border-brand-coral ring-2 ring-brand-coral/20'
+                        'flex items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm',
+                        allLocked && 'opacity-60 bg-gray-50/50 border-gray-200',
+                        !allLocked && 'bg-white border-brand-navy/20 shadow-sm'
                       )}
+                      onClick={() => toggleDate(dg.date)}
                     >
-                      <div className="flex items-center gap-3">
-                        <div
+                      <div
+                        className={cn(
+                          'text-center w-12 flex-shrink-0 rounded-lg py-1',
+                          allLocked ? 'bg-gray-100' : 'bg-brand-navy text-white'
+                        )}
+                      >
+                        <p
                           className={cn(
-                            'w-12 h-12 rounded-lg flex flex-col items-center justify-center',
-                            isToday(s.sessionDate)
-                              ? 'bg-brand-coral/10 text-brand-coral'
-                              : 'bg-brand-navy/5 text-brand-navy'
+                            'text-[10px] uppercase font-medium',
+                            allLocked ? 'text-gray-500' : 'text-white/70'
                           )}
                         >
-                          <span className="text-[10px] font-medium uppercase">
-                            {new Date(s.sessionDate + 'T12:00:00').toLocaleDateString('en-US', {
-                              month: 'short',
-                            })}
+                          {dg.monthLabel}
+                        </p>
+                        <p
+                          className={cn(
+                            'text-lg font-bold',
+                            allLocked ? 'text-gray-500' : 'text-white'
+                          )}
+                        >
+                          {dg.dayNum}
+                        </p>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-brand-dark-text">
+                            {dg.dayLabel}
                           </span>
-                          <span className="text-lg font-bold leading-none">
-                            {new Date(s.sessionDate + 'T12:00:00').getDate()}
-                          </span>
-                        </div>
-                        <div>
-                          <p className="font-medium text-brand-dark-text">
-                            {formatShortDate(s.sessionDate)}
-                            {isToday(s.sessionDate) && (
-                              <span className="ml-2 text-xs font-semibold text-brand-coral">
-                                TODAY
-                              </span>
-                            )}
-                          </p>
-                          {s.sessionType !== 'regular' && (
-                            <p className="text-xs text-brand-muted mt-0.5 capitalize">
-                              {s.sessionType}
-                            </p>
+                          {dg.lockedStaffCount > 0 && (
+                            <Badge className="bg-amber-100 text-amber-700 text-[10px]">
+                              <Lock className="h-2.5 w-2.5 mr-0.5" />
+                              {dg.lockedStaffCount} locked
+                            </Badge>
                           )}
                         </div>
-                      </div>
-                      <ChevronRight className="h-5 w-5 text-brand-muted" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {lockedSessions.length > 0 && (
-              <div>
-                <h3 className="text-sm font-semibold text-brand-muted uppercase tracking-wider mb-2">
-                  Locked Sessions
-                </h3>
-                <div className="space-y-2">
-                  {lockedSessions.slice(0, 10).map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => setSelectedSessionId(s.id)}
-                      className="w-full flex items-center justify-between rounded-xl bg-gray-50 border border-gray-200 p-4 transition-all hover:bg-gray-100 cursor-pointer text-left"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-lg bg-gray-100 flex flex-col items-center justify-center text-gray-400">
-                          <span className="text-[10px] font-medium uppercase">
-                            {new Date(s.sessionDate + 'T12:00:00').toLocaleDateString('en-US', {
-                              month: 'short',
-                            })}
-                          </span>
-                          <span className="text-lg font-bold leading-none">
-                            {new Date(s.sessionDate + 'T12:00:00').getDate()}
-                          </span>
-                        </div>
-                        <div>
-                          <p className="font-medium text-gray-500">
-                            {formatShortDate(s.sessionDate)}
-                          </p>
-                          <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
-                            <Lock className="h-3 w-3" />
-                            Locked
-                          </div>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {dg.sessions.map((s) => (
+                            <span
+                              key={s.id}
+                              className={cn(
+                                'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border',
+                                GROUP_AREA_COLORS[s.groupArea] ||
+                                  'bg-gray-100 text-gray-600 border-gray-200'
+                              )}
+                            >
+                              {s.groupName
+                                .replace('Katan - ', 'K')
+                                .replace('Noar - ', 'N')
+                                .replace(' Grade', '')}
+                            </span>
+                          ))}
                         </div>
                       </div>
-                      <ChevronRight className="h-5 w-5 text-gray-300" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    );
-  }
-
-  // ───────────────────────── Mark attendance ─────────────────────────
-  const locked = !!sessionMarks?.isLockedStaff;
-  const currentSession = sessions.find((s) => s.id === selectedSessionId);
-
-  return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <button
-        onClick={() => {
-          setSelectedSessionId(null);
-          setSearch('');
-        }}
-        className="flex items-center gap-1 text-sm text-brand-muted hover:text-brand-dark-text transition-colors cursor-pointer"
-      >
-        <ChevronLeft className="h-4 w-4" />
-        Back to sessions
-      </button>
-
-      <div
-        className={cn(
-          'rounded-2xl p-6 text-white shadow-md',
-          locked
-            ? 'bg-gradient-to-br from-gray-500 to-gray-600'
-            : 'bg-gradient-to-br from-brand-navy to-brand-navy/80'
-        )}
-      >
-        <div className="flex items-center gap-3 mb-2">
-          {locked ? <Lock className="h-7 w-7" /> : <ClipboardCheck className="h-7 w-7" />}
-          <h1 className="text-2xl font-bold">
-            {locked ? 'Staff Attendance (Locked)' : 'Staff Attendance'}
-          </h1>
-        </div>
-        <p className="text-white/80">
-          {groupDetail?.group.name}
-          {currentSession && ' · ' + formatSessionDate(currentSession.sessionDate)}
-        </p>
-        <div className="mt-4 flex items-center gap-2">
-          <div className="h-2 flex-1 rounded-full bg-white/20">
-            <div
-              className="h-2 rounded-full bg-white transition-all duration-300"
-              style={{
-                width: members.length > 0 ? `${(markedCount / members.length) * 100}%` : '0%',
-              }}
-            />
-          </div>
-          <span className="text-sm font-medium">
-            {markedCount}/{members.length}
-          </span>
-        </div>
-      </div>
-
-      {locked && (
-        <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700 flex items-center gap-2">
-          <Lock className="h-4 w-4" />
-          This session is locked. Marks are read-only. Unlock to edit.
-        </div>
-      )}
-
-      {members.length > 0 && (
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-brand-muted" />
-          <input
-            type="text"
-            placeholder="Search staff..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-xl border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm shadow-sm focus:border-brand-navy focus:outline-none focus:ring-2 focus:ring-brand-navy/20"
-          />
-        </div>
-      )}
-
-      <div className="rounded-xl bg-white shadow-sm divide-y divide-gray-100">
-        {filteredMembers.map((member) => {
-          const current = localMarks[member.id];
-          return (
-            <div
-              key={member.id}
-              className="flex items-center justify-between py-2 px-3"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <p className="font-medium text-sm text-brand-dark-text truncate">
-                  {member.firstName} {member.lastName}
-                </p>
-                <Badge
-                  className={cn(
-                    'text-[9px] uppercase',
-                    member.role === 'mazkirut'
-                      ? 'bg-rose-100 text-rose-700'
-                      : 'bg-emerald-100 text-emerald-700'
-                  )}
-                >
-                  {member.role}
-                </Badge>
-                {saving[member.id] && (
-                  <Loader2 className="h-3 w-3 animate-spin text-brand-muted flex-shrink-0" />
-                )}
-              </div>
-              <div className="flex items-center gap-1 flex-shrink-0 flex-wrap justify-end">
-                {STATUS_CONFIG.map((cfg) => {
-                  const Icon = cfg.icon;
-                  const isSelected = current === cfg.value;
-                  return (
-                    <button
-                      key={cfg.value}
-                      onClick={() => markMember(member.id, cfg.value)}
-                      disabled={locked}
-                      className={cn(
-                        'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all',
-                        isSelected
-                          ? `${cfg.bg} ${cfg.color} border-current`
-                          : 'border-gray-200 text-brand-muted hover:bg-gray-50',
-                        locked && 'cursor-not-allowed opacity-60'
-                      )}
-                    >
-                      <Icon className="h-3 w-3" />
-                      <span>{cfg.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <span className="text-brand-muted">
+                          {isExpanded ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    {isExpanded && renderExpandedDate(dg)}
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
-      </div>
+          </div>
+        ))}
 
-      {members.length > 0 && (
-        <button
-          onClick={() => handleLock(!locked)}
-          disabled={locking || (!locked && markedCount < members.length)}
-          className={cn(
-            'w-full rounded-xl py-4 text-center font-semibold text-white shadow-md transition-all',
-            locked
-              ? 'bg-brand-navy hover:bg-brand-navy/90 cursor-pointer'
-              : markedCount === members.length && !locking
-                ? 'bg-brand-coral hover:bg-brand-coral/90 hover:-translate-y-0.5 hover:shadow-lg cursor-pointer'
-                : 'bg-gray-300 cursor-not-allowed'
-          )}
-        >
-          {locking ? (
-            <span className="flex items-center justify-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {locked ? 'Unlocking...' : 'Locking...'}
-            </span>
-          ) : locked ? (
-            <span className="flex items-center justify-center gap-2">
-              <Unlock className="h-4 w-4" />
-              Unlock Session
-            </span>
-          ) : markedCount === members.length ? (
-            <span className="flex items-center justify-center gap-2">
-              <Lock className="h-4 w-4" />
-              Lock &amp; Finalize
-            </span>
-          ) : (
-            `Mark ${members.length - markedCount} remaining`
-          )}
-        </button>
+      {/* Past */}
+      {!isLoading && !error && pastByMonth.size > 0 && (
+        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mt-8">
+          Past Sessions
+        </h3>
       )}
+      {!isLoading &&
+        !error &&
+        Array.from(pastByMonth.entries()).map(([month, dates]) => (
+          <div key={month}>
+            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+              {month}
+            </h3>
+            <div className="space-y-1.5">
+              {dates.map((dg) => {
+                const isExpanded = expandedDates.has(dg.date);
+                const allLocked = dg.lockedStaffCount === dg.sessions.length;
+
+                return (
+                  <div key={dg.date}>
+                    <div
+                      className={cn(
+                        'flex items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm',
+                        allLocked && 'opacity-50 bg-gray-50/50 border-gray-200',
+                        !allLocked && 'bg-gray-50/60 border-gray-200 opacity-80'
+                      )}
+                      onClick={() => toggleDate(dg.date)}
+                    >
+                      <div className="text-center w-12 flex-shrink-0 rounded-lg py-1 bg-gray-100">
+                        <p className="text-[10px] uppercase font-medium text-gray-400">
+                          {dg.monthLabel}
+                        </p>
+                        <p className="text-lg font-bold text-gray-400">{dg.dayNum}</p>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-gray-500">
+                            {dg.dayLabel}
+                          </span>
+                          {dg.lockedStaffCount > 0 && (
+                            <Badge className="bg-amber-100 text-amber-700 text-[10px]">
+                              <Lock className="h-2.5 w-2.5 mr-0.5" />
+                              {dg.lockedStaffCount} locked
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {dg.sessions.map((s) => (
+                            <span
+                              key={s.id}
+                              className={cn(
+                                'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border',
+                                GROUP_AREA_COLORS[s.groupArea] ||
+                                  'bg-gray-100 text-gray-600 border-gray-200'
+                              )}
+                            >
+                              {s.groupName
+                                .replace('Katan - ', 'K')
+                                .replace('Noar - ', 'N')
+                                .replace(' Grade', '')}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <span className="text-brand-muted">
+                          {isExpanded ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    {isExpanded && renderExpandedDate(dg)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
     </div>
   );
 }

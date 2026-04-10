@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       .from('sessions')
       .select(`
         id, group_id, schedule_id, session_date, session_type, title,
-        is_cancelled, is_locked, hours_present, hours_late,
+        is_cancelled, is_locked, is_locked_staff, hours_present, hours_late,
         groups!inner(name, slug, area),
         attendance_records(count)
       `)
@@ -61,6 +61,7 @@ export async function GET(request: NextRequest) {
       title: s.title,
       isCancelled: s.is_cancelled,
       isLocked: s.is_locked,
+      isLockedStaff: s.is_locked_staff,
       hoursPresent: s.hours_present,
       hoursLate: s.hours_late,
       attendanceCount: (s.attendance_records as { count: number }[])?.[0]?.count ?? 0,
