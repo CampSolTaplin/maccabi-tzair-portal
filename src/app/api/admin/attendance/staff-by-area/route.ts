@@ -232,14 +232,14 @@ export async function GET(request: NextRequest) {
         if (st === 'present' || st === 'late') present += 1;
       }
 
-      // Event hours: counted for events linked to any of the member's groups.
-      // Default attended=true unless explicit event_attendance.attended=false.
+      // Event attendance: only counted when explicitly marked. Default
+      // unchecked, mirroring the chanichim flow — admins/coordinators
+      // mark each madrich on the event's attendance panel.
       const eventRecords: Record<string, boolean> = {};
       for (const ev of eventList) {
         if (ev.event_date > today) continue;
         const explicit = eventAttendanceMap.get(ev.id)?.get(p.id);
-        const attended = explicit === undefined ? true : explicit;
-        eventRecords[ev.id] = attended;
+        eventRecords[ev.id] = explicit === true;
       }
 
       const percentage = total > 0 ? Math.round((present / total) * 100) : 0;

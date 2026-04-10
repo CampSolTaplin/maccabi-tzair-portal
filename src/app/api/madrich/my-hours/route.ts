@@ -155,8 +155,9 @@ export async function GET() {
   }
 
   // ─── Events linked to the madrich's groups ───
-  // A madrich is considered attending any event their group is linked to
-  // unless there's an explicit event_attendance row with attended = false.
+  // Hours from special events only count when an admin / coordinator has
+  // explicitly marked the madrich as attending on the event's attendance
+  // panel. No auto-attribution.
   const todayDate = new Date().toISOString().slice(0, 10);
   const eventsAttended: Array<{ id: string; name: string; date: string; hours: number }> = [];
   let eventTotal = 0;
@@ -184,9 +185,8 @@ export async function GET() {
     for (const r of myEventMarks ?? []) markByEvent.set(r.event_id, r.attended);
 
     for (const ev of eventRows ?? []) {
-      // Default: attending unless explicitly false
-      const attended = markByEvent.has(ev.id) ? markByEvent.get(ev.id)! : true;
-      if (!attended) continue;
+      // Only count if explicitly marked as attending.
+      if (markByEvent.get(ev.id) !== true) continue;
       const hours = Number(ev.real_hours ?? 0);
       eventsAttended.push({
         id: ev.id,

@@ -62,9 +62,9 @@ export async function GET(
       attendanceMap.set(rec.participant_id, rec.attended);
     }
 
-    // 4. Deduplicate members (might be in multiple groups) and resolve their
-    //    default attended state: participants default to null (unknown),
-    //    staff default to true ("attending unless untoggled").
+    // 4. Deduplicate members (might be in multiple groups). All members
+    //    (chanichim and staff alike) default to "not marked" — the admin
+    //    or coordinator must explicitly check who attended.
     const seen = new Set<string>();
     const participants: Array<{
       id: string;
@@ -88,19 +88,12 @@ export async function GET(
       const membershipRole = (m.role as string) ?? p.role;
       const isStaff = membershipRole === 'madrich' || membershipRole === 'mazkirut';
 
-      let attended: boolean | null;
-      if (attendanceMap.has(p.id)) {
-        attended = attendanceMap.get(p.id)!;
-      } else {
-        attended = isStaff ? true : null;
-      }
-
       participants.push({
         id: p.id,
         firstName: p.first_name,
         lastName: p.last_name,
         role: (isStaff ? membershipRole : 'participant') as 'participant' | 'madrich' | 'mazkirut',
-        attended,
+        attended: attendanceMap.has(p.id) ? attendanceMap.get(p.id)! : null,
       });
     }
 
