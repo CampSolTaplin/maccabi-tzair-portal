@@ -12,6 +12,7 @@ import {
   Pencil,
   Trash2,
   ClipboardCheck,
+  Clipboard,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -268,6 +269,16 @@ function EventForm({
 
 function AttendancePanel({ eventId }: { eventId: string }) {
   const queryClient = useQueryClient();
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [bulkResult, setBulkResult] = useState<{
+    matched: number;
+    upserted: number;
+    unmatched: string[];
+    totalInput: number;
+  } | null>(null);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery<{ participants: Participant[] }>({
     queryKey: ['event-attendance', eventId],
@@ -293,6 +304,53 @@ function AttendancePanel({ eventId }: { eventId: string }) {
       queryClient.invalidateQueries({ queryKey: ['events'] });
     },
   });
+
+  async function handleBulkSubmit() {
+    const names = pasteText
+      .split(/\r?\n/)
+      .map((n) => n.trim())
+      .filter((n) => n.length > 0);
+
+    if (names.length === 0) {
+      setBulkError('Paste at least one name before submitting.');
+      return;
+    }
+
+    setBulkSubmitting(true);
+    setBulkError(null);
+    setBulkResult(null);
+    try {
+      const res = await fetch(`/api/admin/events/${eventId}/attendance/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setBulkError(body?.error || 'Bulk import failed');
+        return;
+      }
+      setBulkResult({
+        matched: body.matched ?? 0,
+        upserted: body.upserted ?? 0,
+        unmatched: body.unmatched ?? [],
+        totalInput: body.totalInput ?? names.length,
+      });
+      queryClient.invalidateQueries({ queryKey: ['event-attendance', eventId] });
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Bulk import failed');
+    } finally {
+      setBulkSubmitting(false);
+    }
+  }
+
+  function closePasteDialog() {
+    setShowPaste(false);
+    setPasteText('');
+    setBulkResult(null);
+    setBulkError(null);
+  }
 
   if (isLoading) {
     return (
@@ -367,7 +425,100 @@ function AttendancePanel({ eventId }: { eventId: string }) {
         <span className="text-xs font-medium text-brand-muted">
           {attendedCount}/{allMembers.length} attended
         </span>
+        <button
+          type="button"
+          onClick={() => setShowPaste(true)}
+          className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-brand-dark-text shadow-sm hover:border-brand-navy/30 transition-all cursor-pointer"
+        >
+          <Clipboard className="h-3.5 w-3.5" />
+          Paste names
+        </button>
       </div>
+
+      {showPaste && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h3 className="text-lg font-bold text-brand-dark-text">
+                  Paste attendance list
+                </h3>
+                <p className="text-sm text-brand-muted mt-0.5">
+                  One name per line. Accepts both &quot;First Last&quot; and
+                  &quot;Last, First&quot;. Case and accents are ignored.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closePasteDialog}
+                className="text-brand-muted hover:text-brand-dark-text cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              rows={10}
+              placeholder={'Adrian Cohen\nCamila Cohen\nDavid Bentolila\n...'}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-mono text-brand-dark-text placeholder:text-gray-400 outline-none focus:border-brand-navy focus:ring-2 focus:ring-brand-navy/20"
+            />
+
+            {bulkError && (
+              <div className="mt-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                {bulkError}
+              </div>
+            )}
+
+            {bulkResult && (
+              <div className="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-800 space-y-1">
+                <p className="font-semibold">
+                  Marked {bulkResult.matched} of {bulkResult.totalInput} names as attending.
+                </p>
+                {bulkResult.unmatched.length > 0 && (
+                  <div className="text-amber-900">
+                    <p className="font-medium text-amber-800 mt-1">
+                      Unmatched ({bulkResult.unmatched.length}):
+                    </p>
+                    <ul className="text-xs list-disc list-inside">
+                      {bulkResult.unmatched.slice(0, 15).map((n, i) => (
+                        <li key={i}>{n}</li>
+                      ))}
+                      {bulkResult.unmatched.length > 15 && (
+                        <li>…and {bulkResult.unmatched.length - 15} more</li>
+                      )}
+                    </ul>
+                    <p className="text-xs text-amber-700 mt-1">
+                      These names aren&apos;t in any of the event&apos;s linked
+                      groups. Check the spelling or make sure the person is
+                      assigned to the right group.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button variant="outline" onClick={closePasteDialog}>
+                {bulkResult ? 'Close' : 'Cancel'}
+              </Button>
+              {!bulkResult && (
+                <Button onClick={handleBulkSubmit} disabled={bulkSubmitting}>
+                  {bulkSubmitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Matching...
+                    </>
+                  ) : (
+                    'Mark as attending'
+                  )}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {staffMembers.length > 0 && (
         <div className="space-y-1">

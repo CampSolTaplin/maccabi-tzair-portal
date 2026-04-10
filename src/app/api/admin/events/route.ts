@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthContext } from '@/lib/supabase/auth-helpers';
 
 export async function GET() {
   try {
     const supabase = createAdminClient();
+
+    // Auth + coordinator filtering — only show events a coordinator can
+    // actually see.
+    const auth = await getAuthContext(supabase);
+    if ('error' in auth) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
 
     // Fetch all events with their groups and attendance count
     const { data: events, error } = await supabase
@@ -22,7 +30,7 @@ export async function GET() {
       throw new Error(`Failed to fetch events: ${error.message}`);
     }
 
-    const result = (events ?? []).map((e) => {
+    let result = (events ?? []).map((e) => {
       const groups = (
         e.event_groups as unknown as Array<{
           group_id: string;
@@ -44,6 +52,12 @@ export async function GET() {
         attendanceCount: (e.event_attendance as { count: number }[])?.[0]?.count ?? 0,
       };
     });
+
+    // Coordinator filter: only events linked to at least one of their groups
+    if (auth.groupIds) {
+      const authorized = new Set(auth.groupIds);
+      result = result.filter((e) => e.groups.some((g) => authorized.has(g.id)));
+    }
 
     return NextResponse.json({ events: result });
   } catch (err) {
