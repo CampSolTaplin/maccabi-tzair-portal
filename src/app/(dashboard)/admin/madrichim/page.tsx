@@ -104,6 +104,17 @@ export default function AdminUsersPage() {
     | { kind: 'done'; total: number; succeeded: number; failed: number; errors: Array<{ label: string; error: string }> }
     | { kind: 'error'; message: string }
   >({ kind: 'idle' });
+  const [seedPreSomState, setSeedPreSomState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'running' }
+    | {
+        kind: 'done';
+        created: Array<{ name: string; phone: string }>;
+        skipped: Array<{ name: string; phone: string; reason: string }>;
+        failed: Array<{ name: string; reason: string }>;
+      }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
   const [newGroupId, setNewGroupId] = useState('');
   const [newGroupIds, setNewGroupIds] = useState<string[]>([]);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
@@ -351,6 +362,35 @@ export default function AdminUsersPage() {
       navigator.clipboard.writeText(createdPassword);
       setCopiedPassword(true);
       setTimeout(() => setCopiedPassword(false), 2000);
+    }
+  }
+
+  async function handleSeedPreSomMazkirut() {
+    setSeedPreSomState({ kind: 'running' });
+    try {
+      const res = await fetch('/api/admin/seed-pre-som-mazkirut', {
+        method: 'POST',
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setSeedPreSomState({
+          kind: 'error',
+          message: body?.error || 'Request failed',
+        });
+        return;
+      }
+      setSeedPreSomState({
+        kind: 'done',
+        created: body.created ?? [],
+        skipped: body.skipped ?? [],
+        failed: body.failed ?? [],
+      });
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    } catch (err) {
+      setSeedPreSomState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
   }
 
@@ -1083,6 +1123,125 @@ export default function AdminUsersPage() {
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <Users className="h-12 w-12 text-gray-300 mb-3" />
             <p className="text-brand-muted">No users found. Create your first user above.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* One-shot setup: Pre-SOM Mazkirut seed */}
+      {!isLoading && !error && allUsers.length > 0 && (
+        <Card className="border-emerald-200 bg-emerald-50/40 mt-10">
+          <CardContent className="py-5 space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-emerald-700 uppercase tracking-wider">
+                One-shot setup
+              </h3>
+              <p className="text-sm text-emerald-900/80 mt-1">
+                Create the 9 Pre-SOM mazkirut (Dan Berlagosky, Elizabeth
+                Bakalarz, Ilana Levy, Joel Feldman, Maya Hunis, Mia Rebruj,
+                Milla Szprynger, Noah Mizrachi, Valentina Chmielewski) and
+                assign them to the Pre-SOM group. Safe to click more than
+                once — anyone whose phone already exists is skipped.
+              </p>
+            </div>
+
+            {seedPreSomState.kind === 'idle' && (
+              <Button
+                variant="outline"
+                onClick={handleSeedPreSomMazkirut}
+                className="border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+              >
+                Add Pre-SOM Mazkirut (9)
+              </Button>
+            )}
+
+            {seedPreSomState.kind === 'running' && (
+              <div className="flex items-center gap-2 text-sm text-emerald-900">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Creating users...
+              </div>
+            )}
+
+            {seedPreSomState.kind === 'done' && (
+              <div className="rounded-lg bg-white border border-emerald-200 px-4 py-3 text-sm space-y-2">
+                <p className="font-semibold text-emerald-800">
+                  Done. Created {seedPreSomState.created.length}, skipped{' '}
+                  {seedPreSomState.skipped.length}, failed{' '}
+                  {seedPreSomState.failed.length}.
+                </p>
+                <p className="text-emerald-700">
+                  All new users share the default password{' '}
+                  <code className="font-mono bg-emerald-50 px-1.5 py-0.5 rounded">
+                    M@rjcc2026
+                  </code>
+                  . They will be prompted to change it on first login.
+                </p>
+                {seedPreSomState.created.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-emerald-700 mt-2">
+                      Created:
+                    </p>
+                    <ul className="mt-1 text-xs text-emerald-900 list-disc list-inside">
+                      {seedPreSomState.created.map((c, i) => (
+                        <li key={i}>
+                          {c.name} — {c.phone}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {seedPreSomState.skipped.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-amber-700 mt-2">
+                      Skipped:
+                    </p>
+                    <ul className="mt-1 text-xs text-amber-900 list-disc list-inside">
+                      {seedPreSomState.skipped.map((s, i) => (
+                        <li key={i}>
+                          {s.name}: {s.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {seedPreSomState.failed.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-red-700 mt-2">
+                      Failed:
+                    </p>
+                    <ul className="mt-1 text-xs text-red-900 list-disc list-inside">
+                      {seedPreSomState.failed.map((f, i) => (
+                        <li key={i}>
+                          {f.name}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="pt-1">
+                  <Button
+                    variant="outline"
+                    onClick={() => setSeedPreSomState({ kind: 'idle' })}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {seedPreSomState.kind === 'error' && (
+              <div className="rounded-lg bg-white border border-red-300 px-4 py-3 text-sm">
+                <p className="font-semibold text-red-800">Error</p>
+                <p className="text-red-700 mt-1">{seedPreSomState.message}</p>
+                <div className="mt-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => setSeedPreSomState({ kind: 'idle' })}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
