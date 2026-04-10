@@ -3,7 +3,6 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   ClipboardCheck,
@@ -19,28 +18,47 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
-import type { ParticipantStats } from '@/lib/attendance/stats';
 
-interface SessionHeader {
+type Status = 'present' | 'late' | 'excused';
+
+interface SessionRow {
   id: string;
+  groupId: string;
+  groupName: string;
+  groupSlug: string;
   date: string;
-  isLocked: boolean;
   isCancelled: boolean;
+  isLocked: boolean;
   hasAttendance: boolean;
   isFuture: boolean;
 }
 
-interface StatsResponse {
-  sessions: SessionHeader[];
-  participants: ParticipantStats[];
+interface StaffParticipant {
+  id: string;
+  firstName: string;
+  lastName: string;
+  role: 'madrich' | 'mazkirut';
+  primaryGroupId: string | null;
+  primaryGroupName: string | null;
+  groupIds: string[];
+  records: Record<string, Status>;
+  stats: { percentage: number; present: number; total: number };
 }
 
-interface GroupOption {
-  id: string;
-  name: string;
-  slug: string;
+interface StaffAreaResponse {
   area: string;
+  sessions: SessionRow[];
+  participants: StaffParticipant[];
 }
+
+type AreaKey = 'katan' | 'noar' | 'pre-som' | 'som';
+
+const AREA_TABS: { key: AreaKey; label: string }[] = [
+  { key: 'katan', label: 'Katan' },
+  { key: 'noar', label: 'Noar' },
+  { key: 'pre-som', label: 'Pre-SOM' },
+  { key: 'som', label: 'SOM' },
+];
 
 function getDayAbbr(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00');
@@ -83,11 +101,23 @@ function getPercentageBg(pct: number): string {
   return 'bg-red-50';
 }
 
-const STATUS_COLORS: Record<string, { bg: string; ring: string; label: string }> = {
-  present: { bg: 'bg-emerald-500', ring: 'ring-emerald-300', label: 'P' },
-  late: { bg: 'bg-amber-400', ring: 'ring-amber-200', label: 'L' },
-  excused: { bg: 'bg-gray-400', ring: 'ring-gray-200', label: 'E' },
+const STATUS_COLORS: Record<Status, { bg: string; label: string }> = {
+  present: { bg: 'bg-emerald-500', label: 'P' },
+  late: { bg: 'bg-amber-400', label: 'L' },
+  excused: { bg: 'bg-gray-400', label: 'E' },
 };
+
+/**
+ * A grid column represents a unique session date. Multiple sessions (from
+ * different sub-groups) can share the same date; we keep all their ids so
+ * we can look up the right session for each member by their group
+ * membership.
+ */
+interface DateColumn {
+  date: string;
+  isFuture: boolean;
+  sessionsByGroup: Record<string, { id: string; isCancelled: boolean; isLocked: boolean; hasAttendance: boolean }>;
+}
 
 function StatusCell({
   status,
@@ -95,13 +125,12 @@ function StatusCell({
   participantId,
   onToggle,
 }: {
-  status: string | null;
+  status: Status | null;
   sessionId: string;
   participantId: string;
-  onToggle: (sessionId: string, participantId: string, currentStatus: string | null) => void;
+  onToggle: (sessionId: string, participantId: string, currentStatus: Status | null) => void;
 }) {
   const config = status ? STATUS_COLORS[status] : null;
-
   return (
     <button
       onClick={() => onToggle(sessionId, participantId, status)}
@@ -109,7 +138,7 @@ function StatusCell({
       title={`Click to change (current: ${status || 'none'})`}
     >
       {config ? (
-        <span className={cn('w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white', config.bg, `hover:${config.ring}`)}>
+        <span className={cn('w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white', config.bg)}>
           {config.label}
         </span>
       ) : (
@@ -121,64 +150,45 @@ function StatusCell({
 
 export default function StaffAttendancePage() {
   const queryClient = useQueryClient();
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<'name' | 'percentage'>('name');
+  const [selectedArea, setSelectedArea] = useState<AreaKey>('som');
+  const [sortBy, setSortBy] = useState<'name' | 'group' | 'percentage'>('name');
   const [sortAsc, setSortAsc] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch groups — same endpoint as /admin/attendance
-  const { data: groupsData } = useQuery<{ groups: GroupOption[] }>({
-    queryKey: ['admin-groups-options'],
+  // Load staff data for the selected area
+  const { data, isLoading, error } = useQuery<StaffAreaResponse>({
+    queryKey: ['staff-by-area', selectedArea],
     queryFn: async () => {
-      const res = await fetch('/api/admin/groups');
-      if (!res.ok) throw new Error('Failed to load groups');
-      const data = await res.json();
-      return {
-        groups: data.groups.map((g: { id: string; name: string; slug: string; area: string }) => ({
-          id: g.id, name: g.name, slug: g.slug, area: g.area,
-        })),
-      };
-    },
-  });
-
-  const groups = groupsData?.groups ?? [];
-  const effectiveGroupId = selectedGroupId ?? groups[0]?.id ?? null;
-
-  // Fetch stats with ?role=staff so the API returns madrichim / mazkirut
-  // members of the group instead of chanichim.
-  const { data: statsData, isLoading, error } = useQuery<StatsResponse>({
-    queryKey: ['staff-attendance-stats', effectiveGroupId],
-    queryFn: async () => {
-      const res = await fetch(`/api/admin/attendance/stats?group_id=${effectiveGroupId}&role=staff`);
-      if (!res.ok) throw new Error('Failed to load attendance');
+      const res = await fetch(`/api/admin/attendance/staff-by-area?area=${selectedArea}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || 'Failed to load');
+      }
       return res.json();
     },
-    enabled: !!effectiveGroupId,
   });
 
-  const sessions = statsData?.sessions ?? [];
-  const participants = statsData?.participants ?? [];
+  const sessions = data?.sessions ?? [];
+  const participants = data?.participants ?? [];
 
-  // Toggle attendance mutation — reuses the generic /api/admin/attendance/toggle
-  // endpoint which is role-agnostic.
+  // Toggle attendance (generic endpoint — role-agnostic)
   const toggleMutation = useMutation({
-    mutationFn: async ({ sessionId, participantId, currentStatus }: { sessionId: string; participantId: string; currentStatus: string | null }) => {
+    mutationFn: async ({ sessionId, participantId, currentStatus }: { sessionId: string; participantId: string; currentStatus: Status | null }) => {
       const res = await fetch('/api/admin/attendance/toggle', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, participantId, currentStatus }),
       });
-      if (!res.ok) throw new Error('Failed to toggle attendance');
+      if (!res.ok) throw new Error('Failed to toggle');
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['staff-attendance-stats', effectiveGroupId] });
+      queryClient.invalidateQueries({ queryKey: ['staff-by-area', selectedArea] });
     },
   });
 
-  // Session cancel/restore mutation (same as /admin/attendance)
   const sessionMutation = useMutation({
     mutationFn: async ({ sessionId, isCancelled }: { sessionId: string; isCancelled: boolean }) => {
       const res = await fetch('/api/admin/sessions', {
@@ -189,101 +199,176 @@ export default function StaffAttendancePage() {
       if (!res.ok) throw new Error('Failed to update session');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['staff-attendance-stats', effectiveGroupId] });
+      queryClient.invalidateQueries({ queryKey: ['staff-by-area', selectedArea] });
       queryClient.invalidateQueries({ queryKey: ['admin-sessions'] });
     },
   });
 
   const handleToggle = useCallback(
-    (sessionId: string, participantId: string, currentStatus: string | null) => {
+    (sessionId: string, participantId: string, currentStatus: Status | null) => {
       toggleMutation.mutate({ sessionId, participantId, currentStatus });
     },
     [toggleMutation]
   );
 
+  // Merge sessions by date → grid columns. Multiple sub-group sessions on
+  // the same date collapse into one column; each member will see only the
+  // session belonging to their own group.
+  const dateColumns = useMemo<DateColumn[]>(() => {
+    const byDate = new Map<string, DateColumn>();
+    for (const s of sessions) {
+      const existing = byDate.get(s.date);
+      if (existing) {
+        existing.sessionsByGroup[s.groupId] = {
+          id: s.id,
+          isCancelled: s.isCancelled,
+          isLocked: s.isLocked,
+          hasAttendance: s.hasAttendance,
+        };
+      } else {
+        byDate.set(s.date, {
+          date: s.date,
+          isFuture: s.isFuture,
+          sessionsByGroup: {
+            [s.groupId]: {
+              id: s.id,
+              isCancelled: s.isCancelled,
+              isLocked: s.isLocked,
+              hasAttendance: s.hasAttendance,
+            },
+          },
+        });
+      }
+    }
+    return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [sessions]);
+
+  // Sorting
   const sortedParticipants = useMemo(() => {
     const list = [...participants];
-    const sortFn = (a: ParticipantStats, b: ParticipantStats) => {
+    list.sort((a, b) => {
+      let cmp = 0;
       if (sortBy === 'name') {
-        const cmp = a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName);
-        return sortAsc ? cmp : -cmp;
+        cmp = a.lastName.localeCompare(b.lastName, undefined, { sensitivity: 'base' }) ||
+          a.firstName.localeCompare(b.firstName, undefined, { sensitivity: 'base' });
+      } else if (sortBy === 'group') {
+        const ag = a.primaryGroupName ?? '\uFFFF';
+        const bg = b.primaryGroupName ?? '\uFFFF';
+        cmp = ag.localeCompare(bg, undefined, { numeric: true, sensitivity: 'base' }) ||
+          a.lastName.localeCompare(b.lastName, undefined, { sensitivity: 'base' });
       } else {
-        const cmp = a.stats.percentage - b.stats.percentage;
-        return sortAsc ? cmp : -cmp;
+        cmp = a.stats.percentage - b.stats.percentage;
       }
-    };
-    list.sort(sortFn);
+      return sortAsc ? cmp : -cmp;
+    });
     return list;
   }, [participants, sortBy, sortAsc]);
 
-  // Group columns by month for header
+  // Find the session a member has on a given date (or null). Looks at each
+  // of the member's groupIds and picks the first matching sub-group session
+  // for that date.
+  function getMemberSessionForDate(
+    member: StaffParticipant,
+    col: DateColumn
+  ): { id: string; isCancelled: boolean; isLocked: boolean } | null {
+    for (const groupId of member.groupIds) {
+      const s = col.sessionsByGroup[groupId];
+      if (s) return s;
+    }
+    return null;
+  }
+
+  // Columns by month for the sticky header
   const columnsByMonth = useMemo(() => {
-    const byMonth: { month: string; columns: SessionHeader[] }[] = [];
-    let currentMonth = '';
-    for (const s of sessions) {
-      const month = getMonthLabel(s.date);
-      if (month !== currentMonth) {
-        byMonth.push({ month, columns: [s] });
-        currentMonth = month;
+    const out: { month: string; columns: DateColumn[] }[] = [];
+    let current = '';
+    for (const col of dateColumns) {
+      const m = getMonthLabel(col.date);
+      if (m !== current) {
+        out.push({ month: m, columns: [col] });
+        current = m;
       } else {
-        byMonth[byMonth.length - 1].columns.push(s);
+        out[out.length - 1].columns.push(col);
       }
     }
-    return byMonth;
-  }, [sessions]);
+    return out;
+  }, [dateColumns]);
 
-  // Track which columns are first in their month (for border)
   const firstInMonth = useMemo(() => {
     const set = new Set<number>();
     for (const mg of columnsByMonth) {
-      const idx = sessions.indexOf(mg.columns[0]);
+      const idx = dateColumns.indexOf(mg.columns[0]);
       if (idx >= 0) set.add(idx);
     }
     return set;
-  }, [columnsByMonth, sessions]);
+  }, [columnsByMonth, dateColumns]);
 
-  // Summary stats
+  // Per-column totals
+  const dateTotals = useMemo(() => {
+    const totals: Record<string, { present: number; total: number; pct: number }> = {};
+    for (const col of dateColumns) {
+      if (col.isFuture) continue;
+      // Only count sessions that have any attendance taken at all
+      const anyTaken = Object.values(col.sessionsByGroup).some((s) => s.hasAttendance);
+      if (!anyTaken) continue;
+
+      let present = 0;
+      let total = 0;
+      for (const p of participants) {
+        const s = getMemberSessionForDate(p, col);
+        if (!s) continue;
+        if (s.isCancelled) continue;
+        total += 1;
+        const status = p.records[s.id];
+        if (status === 'present' || status === 'late') present += 1;
+      }
+      const pct = total > 0 ? Math.round((present / total) * 100) : 0;
+      totals[col.date] = { present, total, pct };
+    }
+    return totals;
+  }, [dateColumns, participants]);
+
   const avgPercentage = participants.length > 0
     ? Math.round(participants.reduce((s, p) => s + p.stats.percentage, 0) / participants.length)
     : 0;
 
-  function toggleSort(field: 'name' | 'percentage') {
+  function toggleSort(field: 'name' | 'group' | 'percentage') {
     if (sortBy === field) setSortAsc(!sortAsc);
-    else { setSortBy(field); setSortAsc(field === 'name'); }
-  }
-
-  // Per-session totals for the totals row
-  const sessionTotals = useMemo(() => {
-    const totals: Record<string, { present: number; total: number; pct: number }> = {};
-    for (const s of sessions) {
-      if (s.isCancelled || s.isFuture || !s.hasAttendance) continue;
-      let present = 0;
-      for (const p of participants) {
-        const status = p.records[s.id];
-        if (status === 'present' || status === 'late') present++;
-      }
-      const pct = participants.length > 0 ? Math.round((present / participants.length) * 100) : 0;
-      totals[s.id] = { present, total: participants.length, pct };
+    else {
+      setSortBy(field);
+      setSortAsc(field !== 'percentage');
     }
-    return totals;
-  }, [sessions, participants]);
+  }
 
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file || !effectiveGroupId) return;
+    if (!file) return;
     setImporting(true);
     setImportResult(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('group_id', effectiveGroupId);
+      formData.append('area', selectedArea);
       formData.append('role', 'staff');
-      const res = await fetch('/api/admin/attendance/import', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Import failed');
-      const skippedMsg = data.skipped?.length ? ` Skipped: ${data.skipped.join(', ')}.` : '';
-      setImportResult(`Imported ${data.imported} records from ${data.dateColumns} date columns.${skippedMsg}`);
-      queryClient.invalidateQueries({ queryKey: ['staff-attendance-stats', effectiveGroupId] });
+      const res = await fetch('/api/admin/attendance/import', {
+        method: 'POST',
+        body: formData,
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        const hint =
+          body?.firstHeaderRowValues || body?.secondHeaderRowValues
+            ? ` Row 0: [${(body.firstHeaderRowValues ?? []).join(', ')}]. Row 1: [${(body.secondHeaderRowValues ?? []).join(', ')}].`
+            : '';
+        throw new Error((body?.error || 'Import failed') + hint);
+      }
+      const skippedMsg = body.skipped?.length
+        ? ` Skipped: ${body.skipped.slice(0, 10).join(', ')}${body.skipped.length > 10 ? '…' : ''}.`
+        : '';
+      setImportResult(
+        `Imported ${body.imported} records from ${body.dateColumns} date columns (header row ${body.headerRow}, profiles loaded ${body.profilesLoaded}).${skippedMsg}`
+      );
+      queryClient.invalidateQueries({ queryKey: ['staff-by-area', selectedArea] });
     } catch (err) {
       setImportResult(`Error: ${err instanceof Error ? err.message : 'Import failed'}`);
     } finally {
@@ -293,8 +378,11 @@ export default function StaffAttendancePage() {
   }
 
   const CELL_W = 32;
-  const NAME_W = 220;
+  const NAME_W = 180;
+  const GROUP_W = 140;
   const PCT_W = 56;
+  const STICKY_LEFT_GROUP = NAME_W;
+  const STICKY_LEFT_PCT = NAME_W + GROUP_W;
 
   return (
     <div className="space-y-6">
@@ -316,7 +404,7 @@ export default function StaffAttendancePage() {
           <Button
             variant="outline"
             onClick={() => fileInputRef.current?.click()}
-            disabled={importing || !effectiveGroupId}
+            disabled={importing}
           >
             {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             Import XLSX
@@ -326,41 +414,41 @@ export default function StaffAttendancePage() {
 
       {importResult && (
         <div className={cn(
-          'rounded-lg px-4 py-3 text-sm',
+          'rounded-lg px-4 py-3 text-sm whitespace-pre-wrap',
           importResult.startsWith('Error') ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'
         )}>
           {importResult}
         </div>
       )}
 
-      {/* Group selector */}
-      <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm border border-gray-100 flex-wrap">
+      {/* Area tabs */}
+      <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm border border-gray-100 w-fit">
         <Filter className="ml-2 h-4 w-4 text-brand-muted" />
-        {groups.map((g) => (
+        {AREA_TABS.map((tab) => (
           <button
-            key={g.id}
-            onClick={() => setSelectedGroupId(g.id)}
+            key={tab.key}
+            onClick={() => setSelectedArea(tab.key)}
             className={cn(
               'rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer',
-              effectiveGroupId === g.id
+              selectedArea === tab.key
                 ? 'bg-brand-navy text-white shadow-sm'
                 : 'text-brand-muted hover:text-brand-dark-text hover:bg-gray-50'
             )}
           >
-            {g.name}
+            {tab.label}
           </button>
         ))}
       </div>
 
       {/* Summary cards */}
-      {!isLoading && !error && effectiveGroupId && (
+      {!isLoading && !error && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Card>
             <CardContent className="flex items-center gap-3 py-4">
               <Users className="h-5 w-5 text-brand-navy" />
               <div>
                 <p className="text-2xl font-bold text-brand-dark-text">{participants.length}</p>
-                <p className="text-xs text-brand-muted">Madrichim + Mazkirut</p>
+                <p className="text-xs text-brand-muted">Staff members</p>
               </div>
             </CardContent>
           </Card>
@@ -368,8 +456,8 @@ export default function StaffAttendancePage() {
             <CardContent className="flex items-center gap-3 py-4">
               <ClipboardCheck className="h-5 w-5 text-blue-500" />
               <div>
-                <p className="text-2xl font-bold text-brand-dark-text">{sessions.filter(s => !s.isCancelled).length}</p>
-                <p className="text-xs text-brand-muted">Active Sessions</p>
+                <p className="text-2xl font-bold text-brand-dark-text">{dateColumns.length}</p>
+                <p className="text-xs text-brand-muted">Session dates</p>
               </div>
             </CardContent>
           </Card>
@@ -400,37 +488,30 @@ export default function StaffAttendancePage() {
         </Card>
       )}
 
-      {!isLoading && !error && effectiveGroupId && sessions.length === 0 && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <ClipboardCheck className="h-12 w-12 text-brand-muted/40" />
-            <p className="mt-3 text-sm font-medium text-brand-muted">No sessions yet for this group</p>
-            <p className="text-xs text-brand-muted mt-1">Go to Sessions and click Generate Season</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {!isLoading && !error && sessions.length > 0 && participants.length === 0 && (
+      {!isLoading && !error && participants.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Users className="h-12 w-12 text-brand-muted/40" />
-            <p className="mt-3 text-sm font-medium text-brand-muted">No madrichim or mazkirut assigned</p>
-            <p className="text-xs text-brand-muted mt-1">Add members to this group in Users</p>
+            <p className="mt-3 text-sm font-medium text-brand-muted">No staff in this area</p>
+            <p className="text-xs text-brand-muted mt-1">
+              Make sure madrichim and mazkirut are assigned to this area&apos;s groups in Users.
+            </p>
           </CardContent>
         </Card>
       )}
 
-      {/* Attendance grid */}
-      {!isLoading && !error && sessions.length > 0 && participants.length > 0 && (
+      {/* Grid */}
+      {!isLoading && !error && participants.length > 0 && dateColumns.length > 0 && (
         <Card>
           <CardContent className="py-4 px-0">
             <div className="overflow-auto max-h-[calc(100vh-280px)]">
-              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + PCT_W + sessions.length * CELL_W}px` }}>
+              <table className="text-xs border-collapse" style={{ minWidth: `${NAME_W + GROUP_W + PCT_W + dateColumns.length * CELL_W}px` }}>
                 <thead className="sticky top-0 z-30 bg-white">
                   {/* Month row */}
                   <tr>
                     <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
-                    <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
+                    <th style={{ minWidth: GROUP_W, left: STICKY_LEFT_GROUP }} className="sticky z-40 bg-white" />
+                    <th style={{ minWidth: PCT_W, left: STICKY_LEFT_PCT }} className="sticky z-40 bg-white" />
                     {columnsByMonth.map((mg) => (
                       <th
                         key={mg.month}
@@ -441,27 +522,20 @@ export default function StaffAttendancePage() {
                       </th>
                     ))}
                   </tr>
-                  {/* Day abbreviation row */}
+                  {/* Day abbr row */}
                   <tr>
                     <th style={{ minWidth: NAME_W }} className="sticky left-0 z-40 bg-white" />
-                    <th style={{ minWidth: PCT_W }} className="sticky left-[220px] z-40 bg-white" />
-                    {sessions.map((s) => (
-                      <th key={s.id + '-day'} style={{ width: CELL_W }} className={cn(
-                        'text-center pb-0.5',
-                        s.isCancelled && 'bg-red-50/50',
-                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
-                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
-                      )}>
-                        <span className={cn(
-                          'text-[9px] font-bold',
-                          s.isCancelled ? 'text-red-300' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : getDayColor(s.date)
-                        )}>
-                          {getDayAbbr(s.date)}
+                    <th style={{ minWidth: GROUP_W, left: STICKY_LEFT_GROUP }} className="sticky z-40 bg-white" />
+                    <th style={{ minWidth: PCT_W, left: STICKY_LEFT_PCT }} className="sticky z-40 bg-white" />
+                    {dateColumns.map((col) => (
+                      <th key={col.date + '-day'} style={{ width: CELL_W }} className="text-center pb-0.5">
+                        <span className={cn('text-[9px] font-bold', getDayColor(col.date))}>
+                          {getDayAbbr(col.date)}
                         </span>
                       </th>
                     ))}
                   </tr>
-                  {/* Date number row */}
+                  {/* Date number + cancel row */}
                   <tr className="border-b-2 border-gray-200">
                     <th
                       style={{ minWidth: NAME_W }}
@@ -474,8 +548,18 @@ export default function StaffAttendancePage() {
                       </span>
                     </th>
                     <th
-                      style={{ minWidth: PCT_W }}
-                      className="sticky left-[220px] z-40 bg-white pb-2 px-1 text-center font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none"
+                      style={{ minWidth: GROUP_W, left: STICKY_LEFT_GROUP }}
+                      className="sticky z-40 bg-white pb-2 pl-2 pr-2 text-left font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none border-l border-gray-100"
+                      onClick={() => toggleSort('group')}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        Group
+                        {sortBy === 'group' && (sortAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      style={{ minWidth: PCT_W, left: STICKY_LEFT_PCT }}
+                      className="sticky z-40 bg-white pb-2 px-1 text-center font-semibold text-brand-dark-text text-xs cursor-pointer hover:text-brand-navy select-none border-r-2 border-gray-200"
                       onClick={() => toggleSort('percentage')}
                     >
                       <span className="inline-flex items-center gap-1">
@@ -483,35 +567,46 @@ export default function StaffAttendancePage() {
                         {sortBy === 'percentage' && (sortAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
                       </span>
                     </th>
-                    {sessions.map((s) => (
-                      <th key={s.id} style={{ width: CELL_W }} className={cn(
-                        'pb-2 text-center',
-                        s.isCancelled && 'bg-red-50/50',
-                        s.isFuture && !s.isCancelled && 'bg-blue-50/50',
-                        !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/50'
-                      )}>
-                        <div className="flex flex-col items-center gap-0.5">
-                          <span className={cn(
-                            'font-medium text-[10px]',
-                            s.isCancelled ? 'text-red-400 line-through' : s.isFuture ? 'text-blue-400' : !s.hasAttendance ? 'text-amber-400' : 'text-brand-muted'
-                          )}>
-                            {getDayNum(s.date)}
-                          </span>
-                          <button
-                            onClick={() => sessionMutation.mutate({ sessionId: s.id, isCancelled: !s.isCancelled })}
-                            className={cn(
-                              'w-4 h-4 rounded flex items-center justify-center cursor-pointer transition-colors',
-                              s.isCancelled
-                                ? 'text-red-400 hover:text-emerald-500 hover:bg-emerald-50'
-                                : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
-                            )}
-                            title={s.isCancelled ? 'Restore session' : 'Cancel session'}
-                          >
-                            {s.isCancelled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
-                          </button>
-                        </div>
-                      </th>
-                    ))}
+                    {dateColumns.map((col) => {
+                      // For the header action, cancel/restore the FIRST session on this date
+                      // (the user can still manage per-group cancel from /admin/sessions)
+                      const firstSession = Object.values(col.sessionsByGroup)[0];
+                      const allCancelled = Object.values(col.sessionsByGroup).every((s) => s.isCancelled);
+                      return (
+                        <th
+                          key={col.date}
+                          style={{ width: CELL_W }}
+                          className="pb-2 text-center"
+                        >
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className={cn(
+                              'font-medium text-[10px]',
+                              col.isFuture ? 'text-blue-400' : 'text-brand-muted'
+                            )}>
+                              {getDayNum(col.date)}
+                            </span>
+                            <button
+                              onClick={() =>
+                                firstSession &&
+                                sessionMutation.mutate({
+                                  sessionId: firstSession.id,
+                                  isCancelled: !firstSession.isCancelled,
+                                })
+                              }
+                              className={cn(
+                                'w-4 h-4 rounded flex items-center justify-center cursor-pointer transition-colors',
+                                allCancelled
+                                  ? 'text-red-400 hover:text-emerald-500 hover:bg-emerald-50'
+                                  : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
+                              )}
+                              title={allCancelled ? 'Restore first session' : 'Cancel first session'}
+                            >
+                              {allCancelled ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                            </button>
+                          </div>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
@@ -525,7 +620,12 @@ export default function StaffAttendancePage() {
                           {p.lastName}, {p.firstName}
                         </span>
                       </td>
-                      <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-white py-1 px-1 text-center border-r-2 border-gray-200">
+                      <td style={{ minWidth: GROUP_W, left: STICKY_LEFT_GROUP }} className="sticky z-10 bg-white py-1 pl-2 pr-2 whitespace-nowrap border-l border-gray-100">
+                        <span className="text-[11px] text-brand-muted truncate">
+                          {p.primaryGroupName ?? '—'}
+                        </span>
+                      </td>
+                      <td style={{ minWidth: PCT_W, left: STICKY_LEFT_PCT }} className="sticky z-10 bg-white py-1 px-1 text-center border-r-2 border-gray-200">
                         <span className={cn(
                           'inline-block px-1.5 py-0.5 rounded text-[10px] font-bold',
                           getPercentageColor(p.stats.percentage),
@@ -534,64 +634,80 @@ export default function StaffAttendancePage() {
                           {p.stats.percentage}%
                         </span>
                       </td>
-                      {sessions.map((s, colIdx) => (
-                        <td key={s.id} style={{ width: CELL_W }} className={cn(
-                          'py-1 text-center',
-                          firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
-                          s.isCancelled && 'bg-red-50/30',
-                          s.isFuture && !s.isCancelled && 'bg-blue-50/30',
-                          !s.isCancelled && !s.isFuture && !s.hasAttendance && 'bg-amber-50/30'
-                        )}>
-                          {s.isCancelled ? (
-                            <span className="w-5 h-5 inline-block text-red-300" title="Cancelled">—</span>
-                          ) : s.isFuture ? (
-                            <span className="w-5 h-5 inline-block text-blue-200" title="Future">·</span>
-                          ) : (
-                            <StatusCell
-                              status={p.records[s.id]}
-                              sessionId={s.id}
-                              participantId={p.id}
-                              onToggle={handleToggle}
-                            />
-                          )}
-                        </td>
-                      ))}
+                      {dateColumns.map((col, colIdx) => {
+                        const session = getMemberSessionForDate(p, col);
+                        if (!session) {
+                          return (
+                            <td
+                              key={col.date}
+                              style={{ width: CELL_W }}
+                              className={cn(
+                                'py-1 text-center bg-gray-50/60',
+                                firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15'
+                              )}
+                            >
+                              <span className="text-gray-300 text-[10px]">—</span>
+                            </td>
+                          );
+                        }
+                        return (
+                          <td
+                            key={col.date}
+                            style={{ width: CELL_W }}
+                            className={cn(
+                              'py-1 text-center',
+                              firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                              session.isCancelled && 'bg-red-50/30',
+                              col.isFuture && !session.isCancelled && 'bg-blue-50/30'
+                            )}
+                          >
+                            {session.isCancelled ? (
+                              <span className="text-red-300">—</span>
+                            ) : col.isFuture ? (
+                              <span className="text-blue-200">·</span>
+                            ) : (
+                              <StatusCell
+                                status={(p.records[session.id] as Status | undefined) ?? null}
+                                sessionId={session.id}
+                                participantId={p.id}
+                                onToggle={handleToggle}
+                              />
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
-                  {/* Totals row */}
+                  {/* Totals */}
                   <tr className="border-t-2 border-gray-300 bg-gray-50">
                     <td style={{ minWidth: NAME_W }} className="sticky left-0 z-10 bg-gray-50 py-2 pl-4 pr-2 whitespace-nowrap">
                       <span className="font-bold text-xs text-brand-navy uppercase tracking-wider">Totals</span>
                     </td>
-                    <td style={{ minWidth: PCT_W }} className="sticky left-[220px] z-10 bg-gray-50 py-2 px-1 text-center border-r-2 border-gray-200" />
-                    {sessions.map((s, colIdx) => {
-                      const stats = sessionTotals[s.id];
+                    <td style={{ minWidth: GROUP_W, left: STICKY_LEFT_GROUP }} className="sticky z-10 bg-gray-50 py-2 pl-2 pr-2 whitespace-nowrap border-l border-gray-100" />
+                    <td style={{ minWidth: PCT_W, left: STICKY_LEFT_PCT }} className="sticky z-10 bg-gray-50 py-2 px-1 text-center border-r-2 border-gray-200" />
+                    {dateColumns.map((col, colIdx) => {
+                      const stats = dateTotals[col.date];
                       if (!stats) {
                         return (
-                          <td key={s.id + '-total'} style={{ width: CELL_W }} className={cn(
+                          <td key={col.date + '-total'} style={{ width: CELL_W }} className={cn(
                             'py-2 text-center',
-                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
-                            s.isCancelled && 'bg-red-50/30',
-                            s.isFuture && 'bg-blue-50/30',
+                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15'
                           )} />
                         );
                       }
                       return (
                         <td
-                          key={s.id + '-total'}
+                          key={col.date + '-total'}
                           style={{ width: CELL_W }}
                           className={cn(
                             'py-1 text-center',
-                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15',
+                            firstInMonth.has(colIdx) && 'border-l-2 border-brand-navy/15'
                           )}
                           title={`${stats.present}/${stats.total} (${stats.pct}%)`}
                         >
                           <div className="flex flex-col items-center leading-tight">
                             <span className="text-[9px] font-bold text-brand-dark-text">{stats.present}</span>
-                            <span className={cn(
-                              'text-[8px] font-semibold',
-                              getPercentageColor(stats.pct)
-                            )}>
+                            <span className={cn('text-[8px] font-semibold', getPercentageColor(stats.pct))}>
                               {stats.pct}%
                             </span>
                           </div>
@@ -603,9 +719,8 @@ export default function StaffAttendancePage() {
               </table>
             </div>
 
-            {/* Legend */}
             <div className="mt-4 pt-3 mx-4 border-t border-gray-100 flex items-center gap-4 text-xs text-brand-muted flex-wrap">
-              {Object.entries(STATUS_COLORS).map(([key, val]) => (
+              {(Object.entries(STATUS_COLORS) as [Status, { bg: string; label: string }][]).map(([key, val]) => (
                 <span key={key} className="flex items-center gap-1">
                   <span className={cn('w-4 h-4 rounded-md text-white text-[9px] font-bold flex items-center justify-center', val.bg)}>
                     {val.label}
@@ -618,16 +733,12 @@ export default function StaffAttendancePage() {
                 Absent (no record)
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-4 h-4 rounded-md bg-amber-50 border border-amber-200 text-[9px]" />
-                No attendance taken
+                <span className="w-4 h-4 rounded-md bg-gray-50 flex items-center justify-center text-gray-300 text-[10px]">—</span>
+                No session for this member
               </span>
               <span className="flex items-center gap-1">
                 <span className="w-4 h-4 rounded-md bg-blue-50 border border-blue-200 text-blue-300 text-[9px] flex items-center justify-center">·</span>
                 Future
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-4 h-4 rounded-md bg-red-50 text-red-300 text-[9px] flex items-center justify-center">—</span>
-                Cancelled
               </span>
             </div>
           </CardContent>

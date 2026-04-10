@@ -2,6 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+interface AreaConfig {
+  areas?: string[];
+  slugs?: string[];
+  alwaysIncludeSlugs?: string[];
+}
+
+const AREA_CONFIG: Record<string, AreaConfig> = {
+  katan: { areas: ['katan'], alwaysIncludeSlugs: ['staff-planning'] },
+  noar: { areas: ['noar'], alwaysIncludeSlugs: ['staff-planning'] },
+  'pre-som': { slugs: ['pre-som'], alwaysIncludeSlugs: ['staff-planning'] },
+  som: { slugs: ['som', 'som-planning'] },
+};
+
 const MONTH_MAP: Record<string, { month: number; year: number }> = {
   Jan: { month: 1, year: 2026 },
   Feb: { month: 2, year: 2026 },
@@ -150,14 +163,24 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const groupId = formData.get('group_id') as string | null;
+    const areaParam = formData.get('area') as string | null;
     const roleParam = (formData.get('role') as string | null) ?? '';
-    const isStaff = roleParam === 'staff';
+    const isStaff = roleParam === 'staff' || !!areaParam;
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
-    if (!groupId) {
-      return NextResponse.json({ error: 'No group_id provided' }, { status: 400 });
+    if (!groupId && !areaParam) {
+      return NextResponse.json(
+        { error: 'group_id or area is required' },
+        { status: 400 }
+      );
+    }
+    if (areaParam && !AREA_CONFIG[areaParam]) {
+      return NextResponse.json(
+        { error: 'Invalid area (expected katan, noar, pre-som, or som)' },
+        { status: 400 }
+      );
     }
 
     // Read the XLSX file — cellDates:true so native date cells round-trip correctly
@@ -195,6 +218,9 @@ export async function POST(request: NextRequest) {
         {
           error:
             'No valid date columns found. Expected headers like "Sep 13", "Wed Aug 20", or native Excel dates.',
+          detectedHeaderRow: headerIdx,
+          firstHeaderRowValues: (rows[0] ?? []).slice(0, 10).map((v) => String(v ?? '')),
+          secondHeaderRowValues: (rows[1] ?? []).slice(0, 10).map((v) => String(v ?? '')),
         },
         { status: 400 }
       );
@@ -202,15 +228,62 @@ export async function POST(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Fetch profiles to match by name. For the staff view we limit to
-    // madrich/mazkirut of the target group; otherwise we take all profiles
-    // (the original chanichim import behavior).
+    // ─── Resolve the group set we're importing into ───
+    // For group_id path: single group.
+    // For area path: all groups in the area (including the relevant planning group).
+    let targetGroupIds: string[] = [];
+    if (areaParam) {
+      const config = AREA_CONFIG[areaParam];
+      const orConditions: string[] = [];
+      if (config.areas?.length) orConditions.push(`area.in.(${config.areas.join(',')})`);
+      if (config.slugs?.length) orConditions.push(`slug.in.(${config.slugs.join(',')})`);
+
+      let areaGroups: Array<{ id: string; slug: string }> = [];
+      if (orConditions.length > 0) {
+        const { data, error } = await supabase
+          .from('groups')
+          .select('id, slug')
+          .or(orConditions.join(','))
+          .eq('is_active', true);
+        if (error) {
+          return NextResponse.json(
+            { error: `Failed to resolve area groups: ${error.message}` },
+            { status: 500 }
+          );
+        }
+        areaGroups = data ?? [];
+      }
+      if (config.alwaysIncludeSlugs?.length) {
+        const { data: extras } = await supabase
+          .from('groups')
+          .select('id, slug')
+          .in('slug', config.alwaysIncludeSlugs)
+          .eq('is_active', true);
+        for (const e of extras ?? []) {
+          if (!areaGroups.some((g) => g.id === e.id)) areaGroups.push(e);
+        }
+      }
+      targetGroupIds = areaGroups.map((g) => g.id);
+    } else if (groupId) {
+      targetGroupIds = [groupId];
+    }
+
+    if (targetGroupIds.length === 0) {
+      return NextResponse.json(
+        { error: 'No groups matched the area filter' },
+        { status: 400 }
+      );
+    }
+
+    // ─── Fetch profiles to match by name ───
+    // For the staff view we limit to madrich/mazkirut of the target groups;
+    // otherwise we take all profiles (original chanichim import behavior).
     let profiles: Array<{ id: string; first_name: string; last_name: string }> = [];
     if (isStaff) {
       const { data: staff, error: staffErr } = await supabase
         .from('group_memberships')
         .select('profiles(id, first_name, last_name)')
-        .eq('group_id', groupId)
+        .in('group_id', targetGroupIds)
         .in('role', ['madrich', 'mazkirut'])
         .eq('is_active', true);
       if (staffErr) {
@@ -219,16 +292,18 @@ export async function POST(request: NextRequest) {
           { status: 500 }
         );
       }
-      profiles = (staff ?? [])
-        .map(
-          (m) =>
-            m.profiles as unknown as {
-              id: string;
-              first_name: string;
-              last_name: string;
-            } | null
-        )
-        .filter((p): p is { id: string; first_name: string; last_name: string } => p !== null);
+      // Dedupe (a member can belong to multiple groups in the area)
+      const uniq = new Map<string, { id: string; first_name: string; last_name: string }>();
+      for (const m of staff ?? []) {
+        const p = m.profiles as unknown as {
+          id: string;
+          first_name: string;
+          last_name: string;
+        } | null;
+        if (!p) continue;
+        if (!uniq.has(p.id)) uniq.set(p.id, p);
+      }
+      profiles = Array.from(uniq.values());
     } else {
       const { data, error } = await supabase.from('profiles').select('id, first_name, last_name');
       if (error) {
@@ -251,12 +326,15 @@ export async function POST(request: NextRequest) {
       profileMap.set(`${last} ${first}`, p.id);
     }
 
-    // Fetch sessions for this group on the relevant dates
+    // Fetch sessions for these groups on the relevant dates. For the area
+    // path, a single date may match multiple groups (e.g. a madrich in
+    // Katan 1st Grade and another in Katan 5th Grade), so we keep them
+    // keyed by (date, group_id).
     const dates = dateColumns.map((dc) => dc.date);
     const { data: sessions, error: sessionsError } = await supabase
       .from('sessions')
-      .select('id, session_date, is_cancelled, is_locked, is_locked_staff')
-      .eq('group_id', groupId)
+      .select('id, group_id, session_date, is_cancelled, is_locked, is_locked_staff')
+      .in('group_id', targetGroupIds)
       .in('session_date', dates);
 
     if (sessionsError) {
@@ -266,13 +344,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Build a lookup map: date → { id, locked }
-    const sessionMap = new Map<string, { id: string; locked: boolean }>();
+    // sessionsByDate: date → list of { id, group_id, locked }
+    const sessionsByDate = new Map<
+      string,
+      Array<{ id: string; groupId: string; locked: boolean }>
+    >();
     for (const s of sessions ?? []) {
-      sessionMap.set(s.session_date, {
-        id: s.id,
-        locked: isStaff ? !!s.is_locked_staff : !!s.is_locked,
-      });
+      const locked = isStaff ? !!s.is_locked_staff : !!s.is_locked;
+      const list = sessionsByDate.get(s.session_date) ?? [];
+      list.push({ id: s.id, groupId: s.group_id, locked });
+      sessionsByDate.set(s.session_date, list);
+    }
+
+    // We also need to know which group(s) each profile belongs to, so we
+    // can pick the right session for each (profile, date) pair when there
+    // are multiple sessions on the same date.
+    const profileGroups = new Map<string, Set<string>>();
+    if (isStaff) {
+      const { data: allMems } = await supabase
+        .from('group_memberships')
+        .select('profile_id, group_id')
+        .in('group_id', targetGroupIds)
+        .in('role', ['madrich', 'mazkirut'])
+        .eq('is_active', true);
+      for (const m of allMems ?? []) {
+        if (!profileGroups.has(m.profile_id)) profileGroups.set(m.profile_id, new Set());
+        profileGroups.get(m.profile_id)!.add(m.group_id);
+      }
     }
 
     const skipped: string[] = [];
@@ -308,16 +406,35 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
+      const myGroups = profileGroups.get(profileId);
+
       for (const dc of dateColumns) {
         const status = interpretStatus(row?.[dc.index]);
         if (status === null) continue;
 
-        const sess = sessionMap.get(dc.date);
-        if (!sess) continue;
-        if (sess.locked) continue; // don't overwrite locked rows
+        const candidates = sessionsByDate.get(dc.date);
+        if (!candidates || candidates.length === 0) continue;
+
+        // Pick the session that belongs to one of this profile's groups.
+        // For the single-group path (chanichim), there's only ever one
+        // candidate. For the area path, we need to match by membership.
+        let session = candidates[0];
+        if (myGroups && candidates.length > 0) {
+          const match = candidates.find((c) => myGroups.has(c.groupId));
+          if (match) session = match;
+          else if (!isStaff) {
+            // chanichim fallback: use the single candidate
+            session = candidates[0];
+          } else {
+            // No matching group for this profile on this date — skip cell
+            continue;
+          }
+        }
+
+        if (session.locked) continue; // don't overwrite locked rows
 
         upserts.push({
-          session_id: sess.id,
+          session_id: session.id,
           participant_id: profileId,
           status,
           marked_at: new Date().toISOString(),
@@ -347,6 +464,7 @@ export async function POST(request: NextRequest) {
       totalRows: rows.length - dataStart,
       dateColumns: dateColumns.length,
       headerRow: headerIdx,
+      profilesLoaded: profiles.length,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
