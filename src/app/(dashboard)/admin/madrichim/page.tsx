@@ -59,6 +59,13 @@ interface GroupOption {
 }
 
 type FilterTab = 'all' | 'admin' | 'coordinator' | 'madrich' | 'mazkirut';
+type SortMode = 'lastName' | 'firstName' | 'group';
+
+const SORT_OPTIONS: { key: SortMode; label: string }[] = [
+  { key: 'lastName', label: 'Last name' },
+  { key: 'firstName', label: 'First name' },
+  { key: 'group', label: 'Assigned group' },
+];
 
 const AREA_COLORS: Record<string, string> = {
   katan: 'bg-blue-100 text-blue-700',
@@ -104,10 +111,11 @@ export default function AdminUsersPage() {
   const [reassigning, setReassigning] = useState<string | null>(null);
   const [addingGroupTo, setAddingGroupTo] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ firstName: string; lastName: string; email: string; phone: string }>({ firstName: '', lastName: '', email: '', phone: '' });
+  const [editForm, setEditForm] = useState<{ firstName: string; lastName: string; email: string; phone: string; role: UserRole }>({ firstName: '', lastName: '', email: '', phone: '', role: 'madrich' });
   const [editResult, setEditResult] = useState<{ userId: string; password?: string } | null>(null);
   const [changingRole, setChangingRole] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
+  const [sortMode, setSortMode] = useState<SortMode>('lastName');
   const [resetPasswordResult, setResetPasswordResult] = useState<{ userId: string; password: string } | null>(null);
   const [copiedResetPassword, setCopiedResetPassword] = useState(false);
 
@@ -142,10 +150,32 @@ export default function AdminUsersPage() {
     ? allUsers
     : allUsers.filter((u) => u.role === activeFilter);
 
-  const activeFiltered = filteredUsers.filter((u) => u.isActive);
-  const inactiveFiltered = filteredUsers.filter((u) => !u.isActive);
+  // Natural sort for group names so "2nd Grade" < "10th Grade"
+  function compareUsers(a: UserRecord, b: UserRecord): number {
+    const opts: Intl.CollatorOptions = { numeric: true, sensitivity: 'base' };
+    if (sortMode === 'firstName') {
+      const byFirst = a.firstName.localeCompare(b.firstName, undefined, opts);
+      return byFirst !== 0 ? byFirst : a.lastName.localeCompare(b.lastName, undefined, opts);
+    }
+    if (sortMode === 'group') {
+      const aG = a.groups[0]?.groupName ?? '';
+      const bG = b.groups[0]?.groupName ?? '';
+      // Put users with no group last
+      if (!aG && bG) return 1;
+      if (aG && !bG) return -1;
+      const byGroup = aG.localeCompare(bG, undefined, opts);
+      if (byGroup !== 0) return byGroup;
+      return a.lastName.localeCompare(b.lastName, undefined, opts);
+    }
+    // lastName (default)
+    const byLast = a.lastName.localeCompare(b.lastName, undefined, opts);
+    return byLast !== 0 ? byLast : a.firstName.localeCompare(b.firstName, undefined, opts);
+  }
 
-  // Group active users by role for display
+  const activeFiltered = filteredUsers.filter((u) => u.isActive).sort(compareUsers);
+  const inactiveFiltered = filteredUsers.filter((u) => !u.isActive).sort(compareUsers);
+
+  // Group active users by role for display (already sorted above, filter preserves order)
   const activeByRole: Record<string, typeof activeFiltered> = {
     admin: activeFiltered.filter((u) => u.role === 'admin'),
     coordinator: activeFiltered.filter((u) => u.role === 'coordinator'),
@@ -245,8 +275,33 @@ export default function AdminUsersPage() {
       lastName: user.lastName,
       email: user.email ?? '',
       phone: user.phone ?? '',
+      role: user.role,
     });
     setEditResult(null);
+  }
+
+  async function handleSaveEdit(user: UserRecord) {
+    // If role changed, fire the change_role action first. We use mutateAsync
+    // so we can wait for it before firing the profile update.
+    if (editForm.role !== user.role) {
+      try {
+        await actionMutation.mutateAsync({
+          profileId: user.id,
+          action: 'change_role',
+          role: editForm.role,
+        });
+      } catch {
+        return; // actionMutation surfaces the error in its own state
+      }
+    }
+
+    editMutation.mutate({
+      profileId: user.id,
+      firstName: editForm.firstName,
+      lastName: editForm.lastName,
+      email: editForm.email,
+      phone: editForm.phone,
+    });
   }
 
   function handleCopyResetPassword() {
@@ -424,21 +479,44 @@ export default function AdminUsersPage() {
                 onChange={(e) => setEditForm(f => ({ ...f, phone: e.target.value }))}
                 className={inputClass}
               />
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-brand-muted mb-1 uppercase tracking-wider">
+                  Role
+                </label>
+                <select
+                  value={editForm.role}
+                  onChange={(e) => setEditForm(f => ({ ...f, role: e.target.value as UserRole }))}
+                  className={inputClass}
+                >
+                  <option value="admin">Admin</option>
+                  <option value="coordinator">Coordinator</option>
+                  <option value="madrich">Madrich</option>
+                  <option value="mazkirut">Mazkirut</option>
+                </select>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
-                disabled={editMutation.isPending || !editForm.firstName || !editForm.lastName}
-                onClick={() => editMutation.mutate({ profileId: user.id, ...editForm })}
+                disabled={editMutation.isPending || actionMutation.isPending || !editForm.firstName || !editForm.lastName}
+                onClick={() => handleSaveEdit(user)}
               >
-                {editMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                {editMutation.isPending || actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 Save
               </Button>
               {editMutation.error && (
                 <p className="text-xs text-red-600">{editMutation.error.message}</p>
               )}
+              {actionMutation.error && (
+                <p className="text-xs text-red-600">{actionMutation.error.message}</p>
+              )}
               {!user.email && editForm.email && (
-                <p className="text-xs text-amber-600">Adding email will create a login account with a temporary password.</p>
+                <p className="text-xs text-amber-600">Adding email will create a login account with the default password.</p>
+              )}
+              {editForm.role !== user.role && (
+                <p className="text-xs text-amber-600">
+                  Role will change from {ROLE_CONFIG[user.role]?.label ?? user.role} to {ROLE_CONFIG[editForm.role]?.label ?? editForm.role}.
+                </p>
               )}
             </div>
           </CardContent>
@@ -773,22 +851,46 @@ export default function AdminUsersPage() {
         </Card>
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
-        {FILTER_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveFilter(tab.key)}
-            className={cn(
-              'px-4 py-1.5 text-sm font-medium rounded-md transition-colors cursor-pointer',
-              activeFilter === tab.key
-                ? 'bg-white text-brand-navy shadow-sm'
-                : 'text-brand-muted hover:text-brand-dark-text'
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
+      {/* Filter + sort */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+          {FILTER_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveFilter(tab.key)}
+              className={cn(
+                'px-4 py-1.5 text-sm font-medium rounded-md transition-colors cursor-pointer',
+                activeFilter === tab.key
+                  ? 'bg-white text-brand-navy shadow-sm'
+                  : 'text-brand-muted hover:text-brand-dark-text'
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-brand-muted uppercase tracking-wider">
+            Sort by
+          </span>
+          <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+            {SORT_OPTIONS.map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => setSortMode(opt.key)}
+                className={cn(
+                  'px-3 py-1.5 text-sm font-medium rounded-md transition-colors cursor-pointer',
+                  sortMode === opt.key
+                    ? 'bg-white text-brand-navy shadow-sm'
+                    : 'text-brand-muted hover:text-brand-dark-text'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Create form */}
